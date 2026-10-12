@@ -13,13 +13,13 @@ that Grok hot-reloads, plus the official `cli-chat-proxy` billing endpoint.
 PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/chbon/MultiGrokState/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/goldshoot0720/MultiGrokState/main/install.ps1 | iex
 ```
 
 CMD (no PowerShell required):
 
 ```cmd
-curl -fsSL https://raw.githubusercontent.com/chbon/MultiGrokState/main/install.cmd -o install.cmd && install.cmd && del install.cmd
+curl -fsSL https://raw.githubusercontent.com/goldshoot0720/MultiGrokState/main/install.cmd -o install.cmd && install.cmd && del install.cmd
 ```
 
 Both scripts check for Node 18+, npm and git, clone the source to
@@ -30,7 +30,7 @@ in place; pass `-Force` (PowerShell) to reinstall from scratch.
 PowerShell options — run it as a script block if you need to pass them:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/chbon/MultiGrokState/main/install.ps1))) `
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/goldshoot0720/MultiGrokState/main/install.ps1))) `
     -InstallDir 'C:\Tools\MultiGrokState' -NoPath
 ```
 

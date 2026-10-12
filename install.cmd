@@ -9,7 +9,7 @@ REM  Usage:
 REM    curl -fsSL https://raw.githubusercontent.com/chbon/MultiGrokState/main/install.cmd -o install.cmd && install.cmd && del install.cmd
 REM ===================================================================
 
-set "REPO=chbon/MultiGrokState"
+set "REPO=goldshoot0720/MultiGrokState"
 set "BRANCH=main"
 set "INSTALL_DIR=%USERPROFILE%\.multigrokstate"
 set "GROK_HOME_DIR=%USERPROFILE%\.grok"

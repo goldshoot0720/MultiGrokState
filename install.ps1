@@ -29,7 +29,7 @@
 #>
 param(
     [string]$InstallDir = "$env:USERPROFILE\.multigrokstate",
-    [string]$Repo = "chbon/MultiGrokState",
+    [string]$Repo = "goldshoot0720/MultiGrokState",
     [string]$Branch = "main",
     [switch]$NoPath,
     [switch]$Force
