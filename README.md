@@ -8,6 +8,32 @@ that Grok hot-reloads, plus the official `cli-chat-proxy` billing endpoint.
 
 ## Getting started
 
+### One-line install (macOS / Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/goldshoot0720/MultiGrokState/main/install.sh | bash
+```
+
+Options go after `bash -s --`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/goldshoot0720/MultiGrokState/main/install.sh \
+  | bash -s -- --install-dir "$HOME/tools/multigrokstate"
+```
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--install-dir <path>` | `~/.multigrokstate` | Where to install |
+| `--repo <owner/name>` | `goldshoot0720/MultiGrokState` | Source repository |
+| `--branch <name>` | `main` | Branch or tag to install |
+| `--no-link` | off | Skip `npm link`; run via `node bin/gs.js` |
+| `-f`, `--force` | off | Reinstall from scratch |
+| `-h`, `--help` | — | Usage |
+
+The same settings work as environment variables (`INSTALL_DIR`, `REPO`,
+`BRANCH`, `NO_LINK=1`, `FORCE=1`), which is handy when the script is fetched
+from somewhere other than a pipe.
+
 ### One-line install (Windows)
 
 PowerShell:
@@ -22,10 +48,23 @@ CMD (no PowerShell required):
 curl -fsSL https://raw.githubusercontent.com/goldshoot0720/MultiGrokState/main/install.cmd -o install.cmd && install.cmd && del install.cmd
 ```
 
-Both scripts check for Node 18+, npm and git, clone the source to
-`%USERPROFILE%\.multigrokstate`, install dependencies, register the
-`MultiGrokState` command globally, and run a smoke test. Re-running updates
-in place; pass `-Force` (PowerShell) to reinstall from scratch.
+### What the installers do
+
+All three check for Node 18+, npm and git, download the source to
+`~/.multigrokstate` (`%USERPROFILE%\.multigrokstate` on Windows), install
+dependencies, register the `MultiGrokState` command globally, and run a smoke
+test. Re-running updates in place; pass `--force` / `-Force` to reinstall from
+scratch.
+
+Two details specific to the macOS/Linux script:
+
+- It re-executes itself from a temporary copy. `curl … | bash` feeds the
+  script to the shell through **stdin**, and the shell reads it incrementally —
+  so the first child process that reads stdin (`npm`, `git`, the Xcode Command
+  Line Tools prompt) would otherwise swallow the rest of the script.
+- If `npm link` fails (usually `EACCES` from a root-owned global prefix) it
+  falls back to symlinks in `~/.local/bin` and tells you the exact `PATH` line
+  to add.
 
 PowerShell options — run it as a script block if you need to pass them:
 
@@ -328,9 +367,19 @@ src/cli.js         chalk rendering + command dispatch
 test/run.js        local test harness (mock API + isolated GROK_HOME)
 install.ps1        PowerShell installer (irm ... | iex)
 install.cmd        CMD installer (curl -o ... && ... && del)
+install.sh         macOS / Linux installer (curl ... | bash)
 ```
 
 ## Uninstall
+
+macOS / Linux:
+
+```bash
+npm unlink -g multi-grok-state          # remove the global command
+rm -rf ~/.multigrokstate
+```
+
+Windows:
 
 ```powershell
 npm unlink -g multi-grok-state          # remove the global command
