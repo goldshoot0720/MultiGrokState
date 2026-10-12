@@ -21,6 +21,13 @@ Node.js CLI，管理多個 Grok CLI 帳號。對外指令名 **`MultiGrokState`*
 - 一鍵安裝預設 `Repo` 必須是上面這個。上線後用 raw URL 驗證回 200。
 - push 用 `gh auth setup-git`；`GIT_TERMINAL_PROMPT=0` 避免卡住。
 
+## 提交慣例：每次改完自動 commit + push（2026-10-12 使用者要求）
+- **改完任何東西就 commit 並 push，不用等使用者開口。**
+- 已裝 **`.git/hooks/post-commit`**（本機、不進 repo）：每次 commit 後自動 `git push`
+  當前分支到 upstream。失敗只印訊息、**絕不擋 commit**。跳過單次用 `GIT_AUTO_PUSH=0 git commit …`。
+- 提交前仍要守紅線：先 `git fetch`，確認 `git merge-base --is-ancestor origin/main HEAD`。
+- 這個 hook 是 **per-clone** 的（`.git/hooks` 不隨 repo 走）→ macOS checkout 要另外裝。
+
 ## 核心 API 事實
 - `~/.grok/auth.json` 是 **map**：key = `https://auth.x.ai::<client_id>`，
   value = `{ key, refresh_token, email, user_id, expires_at, oidc_client_id, oidc_issuer }`。
