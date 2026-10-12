@@ -65,8 +65,8 @@ node bin/gs.js list          # from the project directory
 MultiGrokState login <name>     # browser login → snapshot to accounts/<name>_auth.json
 MultiGrokState logout           # delete live auth.json (archives untouched)
 MultiGrokState switch <name>    # copy an archive back into auth.json
-MultiGrokState usage            # weekly / monthly quota per account
-MultiGrokState list --usage     # account table + live quota
+MultiGrokState usage            # weekly / monthly quota + reset time per account
+MultiGrokState list --usage     # account table + live quota + reset time
 MultiGrokState where            # print resolved paths
 ```
 
@@ -167,6 +167,33 @@ When `creditUsagePercent` is missing the percentage is derived from
 `used / limit`; if there's no cap either, the bar shows `—` and the row reads
 `no capped allowance on this plan`.
 
+#### Reset time
+
+Every window prints when it rolls over, taken from `currentPeriod.end`
+(weekly) and `billingPeriodEnd` (monthly):
+
+```
+  testacct you@example.com
+    weekly  ████░░░░░░░░░░░░░░░░ 20.0%
+            Resets: October 18, 21:37, 2026 (in 6d 2h)
+    monthly ██░░░░░░░░░░░░░░░░░░  6.0%
+            18 / 300
+            Resets: November 1, 08:00, 2026 (in 19d 13h)
+```
+
+The absolute time is rendered in **your local timezone** (`October 18, 21:37`
+matches what the Grok CLI shows in its own Usage panel). The parenthesised
+countdown turns yellow inside one day and red once the reset is due.
+
+Two details worth knowing, both handled in `src/usage.js`:
+
+- xAI timestamps are RFC 3339 with a **numeric offset and microsecond
+  precision** — `2026-10-18T13:37:26.239595+00:00`. `parseTimestamp()` guards
+  this and returns `null` on anything unparseable, so a malformed value
+  degrades to a missing line rather than `Invalid Date` leaking into the UI.
+- `daysUntil()` **floors** rather than rounds up, so a `6d 2h` countdown reads
+  as `6d` and never disagrees with the countdown beside it.
+
 ### Token refresh
 
 Access tokens in `auth.json` are short-lived (it is a normal 7-day OIDC token
@@ -226,14 +253,15 @@ The harness never touches your real `~/.grok`. It creates a throwaway
 that reproduces xAI's behaviour — including the **401 → refresh → 200** flow.
 
 ```bash
-npm test              # run all 21 checks
+npm test              # run all 37 checks
 node test/run.js --keep   # keep the sandbox for manual poking
 ```
 
 Covered: archive listing, active-account detection, usage rendering (reported
-and derived percentages), token rotation persistence, switch, logout (live file
-removed, archives kept), `logout -k` backup, unknown-account errors and path
-traversal rejection.
+and derived percentages), reset-time formatting (date, countdown, timezone
+handling, malformed input), token rotation persistence, switch, logout (live
+file removed, archives kept), `logout -k` backup, unknown-account errors and
+path traversal rejection.
 
 ## Security
 

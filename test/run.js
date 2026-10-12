@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
@@ -274,6 +274,38 @@ async function main() {
     console.log('\n\x1b[1m9. name sanitisation\x1b[0m');
     const weird = await runGs(['switch', 'my account!!']);
     check('spaces/punctuation handled without crash', weird.status === 0 || /unknown account/i.test(weird.stderr + weird.stdout), weird.stderr + weird.stdout);
+
+    console.log('\n\x1b[1m10. reset time formatting\x1b[0m');
+    // The reset line must appear in both usage views, showing a real date
+    // rather than only a relative day count.
+    check('usage prints a "Resets:" line', /Resets:\s*\w+ \d{1,2}, \d{2}:\d{2}/.test(usage.stdout), usage.stdout);
+    check('usage shows the weekly reset date', /October 18, \d{2}:\d{2}/.test(usage.stdout), usage.stdout);
+    check('usage shows the monthly reset date', /November 1, \d{2}:\d{2}/.test(usage.stdout), usage.stdout);
+    check('usage includes a countdown', /\(in \d+[dh]/.test(usage.stdout), usage.stdout);
+
+    const listUsage = await runGs(['list', '--usage']);
+    check('list --usage prints a reset line', /Resets:\s*\w+ \d{1,2}, \d{2}:\d{2}/.test(listUsage.stdout), listUsage.stdout);
+
+    // Formatter unit checks — guards the RFC 3339 oddities xAI actually emits
+    // (numeric +00:00 offset, microsecond precision, missing fields).
+    const fd = await import(pathToFileURL(path.join(root, 'src', 'usage.js')).href);
+    const plusOffset = '2026-10-18T13:37:26.239595+00:00';
+    check('parseTimestamp accepts +00:00 offset', fd.parseTimestamp(plusOffset) != null);
+    check('parseTimestamp accepts microseconds', fd.parseTimestamp(plusOffset) === Date.parse('2026-10-18T13:37:26.239Z'));
+    check('parseTimestamp returns null on junk', fd.parseTimestamp('not-a-date') === null && fd.parseTimestamp(null) === null && fd.parseTimestamp('') === null);
+    check('formatResetTime renders "Month D, HH:MM"', /^October 18, \d{2}:\d{2}$/.test(fd.formatResetTime(plusOffset)), fd.formatResetTime(plusOffset));
+    check('formatResetTime withYear appends the year', /, 2026$/.test(fd.formatResetTime(plusOffset, { withYear: true })), fd.formatResetTime(plusOffset, { withYear: true }));
+    check('formatResetTime returns null on junk', fd.formatResetTime('nope') === null);
+    check('formatCountdown returns null on junk', fd.formatCountdown('nope') === null);
+    check('formatCountdown reports a positive window', /^\d+d \d+h$/.test(fd.formatCountdown(plusOffset)), fd.formatCountdown(plusOffset));
+    check('daysUntil floors (never overstates)', fd.daysUntil(plusOffset) === 6, String(fd.daysUntil(plusOffset)));
+    check('daysUntil is 0 for a past timestamp', fd.daysUntil('2020-01-01T00:00:00Z') === 0, String(fd.daysUntil('2020-01-01T00:00:00Z')));
+    check('day count never exceeds countdown', (() => {
+      const d = fd.daysUntil(plusOffset);
+      const cd = fd.formatCountdown(plusOffset);
+      const cdDays = parseInt(cd, 10);
+      return d <= cdDays;
+    })(), `${fd.daysUntil(plusOffset)} vs ${fd.formatCountdown(plusOffset)}`);
   } finally {
     restoreUsage();
     server.close();

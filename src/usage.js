@@ -86,6 +86,75 @@ function shortPeriod(type) {
 }
 
 /**
+ * Parse an xAI timestamp into epoch ms.
+ *
+ * The API emits RFC 3339 with a numeric offset and microsecond precision,
+ * e.g. `2026-10-18T13:37:26.239595+00:00`. `Date.parse` handles that, but we
+ * guard anyway so a malformed value degrades to null instead of NaN leaking
+ * into the UI. A trailing `Z` is normalised to `+00:00` for older engines.
+ */
+export function parseTimestamp(value) {
+  if (value == null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string') return null;
+  const text = value.trim();
+  if (!text) return null;
+  const t = Date.parse(text);
+  return Number.isNaN(t) ? null : t;
+}
+
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+const pad2 = (n) => String(n).padStart(2, '0');
+
+/**
+ * Render a reset timestamp the way the Grok CLI does:
+ *   "October 18, 21:37"
+ * Rendered in the machine's local timezone. Returns null when unparseable.
+ */
+export function formatResetTime(value, { withYear = false } = {}) {
+  const t = parseTimestamp(value);
+  if (t == null) return null;
+  const d = new Date(t);
+  const base = `${MONTH_NAMES[d.getMonth()]} ${d.getDate()}, ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  return withYear ? `${base}, ${d.getFullYear()}` : base;
+}
+
+/**
+ * Whole days until a timestamp, floored so it never overstates the wait.
+ * Floored (not rounded up) so it agrees with the "6d 2h" countdown form:
+ * 6d 2h of remaining time must not read as "7d". Returns null when
+ * unparseable, and 0 once the reset is due.
+ */
+export function daysUntil(value) {
+  const t = parseTimestamp(value);
+  if (t == null) return null;
+  const delta = t - Date.now();
+  if (delta <= 0) return 0;
+  return Math.floor(delta / 86_400_000);
+}
+
+/** Human countdown such as "in 6d 3h" / "in 4h 12m" / "in 8m". */
+export function formatCountdown(value) {
+  const t = parseTimestamp(value);
+  if (t == null) return null;
+  let ms = t - Date.now();
+  if (ms <= 0) return 'now';
+  const d = Math.floor(ms / 86_400_000);
+  ms -= d * 86_400_000;
+  const h = Math.floor(ms / 3_600_000);
+  ms -= h * 3_600_000;
+  const m = Math.floor(ms / 60_000);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+
+/**
  * Normalise a billing payload into a flat, display-ready shape.
  *
  * xAI has shipped at least two variants:

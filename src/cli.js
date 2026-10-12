@@ -1,7 +1,7 @@
 import chalk from 'chalk';
 
 import { listAccounts, readLiveAuth, primaryCredential, displayName, identityOf, humanExpiry, updateAccountCredential } from './accounts.js';
-import { fetchUsage, bar } from './usage.js';
+import { fetchUsage, bar, formatResetTime, formatCountdown, daysUntil, parseTimestamp } from './usage.js';
 import { login, logout, switchTo, findGrokBinary } from './commands.js';
 import { accountsDir, authJsonPath } from './paths.js';
 
@@ -53,13 +53,34 @@ function rule(label) {
   return chalk.gray(head + '─'.repeat(Math.max(0, width - head.length - 1)));
 }
 
+/** "resets in 6d" — kept for the compact table view. */
 function relativeDays(iso) {
-  if (!iso) return '';
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return '';
-  const days = Math.ceil((t - Date.now()) / 86_400_000);
-  if (days <= 0) return chalk.gray('resets soon');
-  return chalk.gray(`resets in ${days}d`);
+  const cd = formatCountdown(iso);
+  if (cd == null) return '';
+  if (cd === 'now') return chalk.red('resets now');
+  // Collapse the countdown to its coarse unit so the column stays narrow
+  // and never disagrees with the full "Resets:" line beneath it.
+  const d = daysUntil(iso);
+  if (d != null && d >= 1) return chalk.gray(`resets in ${d}d`);
+  return chalk.gray(`resets in ${cd}`);
+}
+
+/**
+ * "Resets: October 18, 21:37 (in 6d 3h)" — the full reset line.
+ * Colour shifts to yellow/red as the reset approaches, so an imminent
+ * rollover is obvious at a glance.
+ */
+function resetLine(value, { label = 'Resets' } = {}) {
+  if (parseTimestamp(value) == null) return null;
+  const when = formatResetTime(value, { withYear: true });
+  const countdown = formatCountdown(value);
+  const days = daysUntil(value);
+
+  const head = chalk.gray(`${label}:`);
+  const paint = days != null && days <= 0 ? chalk.red : days != null && days <= 1 ? chalk.yellow : chalk.white;
+  const absolute = paint(when);
+  const rel = countdown && countdown !== 'now' ? chalk.gray(` (in ${countdown})`) : chalk.red(' (imminent)');
+  return `${head} ${absolute}${rel}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -131,6 +152,8 @@ async function printUsageTable(accounts) {
         `${paintBar(pct)} ${paintPercent(pct).padEnd(14)} ${chalk.gray(`[${period}]`)} ${relativeDays(u.periodEnd)}` +
           (allowance ? `\n  ${' '.repeat(16)}${allowance}` : '')
       );
+      const reset = resetLine(u.periodEnd);
+      if (reset) console.log(`  ${' '.repeat(16)}${reset}`);
     } catch (err) {
       console.log(chalk.red(`✖ ${err.message}`));
     }
@@ -172,11 +195,14 @@ async function cmdUsage(argv) {
       }
       console.log(`    weekly  ${paintBar(u.creditUsagePercent)} ${paintPercent(u.creditUsagePercent)}`);
       if (allowanceText(u)) console.log(`            ${allowanceText(u)}`);
+      const weeklyReset = resetLine(u.periodEnd);
+      if (weeklyReset) console.log(`            ${weeklyReset}`);
       if (u.monthly) {
         console.log(`    monthly ${paintBar(u.monthly.creditUsagePercent)} ${paintPercent(u.monthly.creditUsagePercent)}`);
         if (allowanceText(u.monthly)) console.log(`            ${allowanceText(u.monthly)}`);
+        const monthlyReset = resetLine(u.monthly.periodEnd);
+        if (monthlyReset) console.log(`            ${monthlyReset}`);
       }
-      if (u.periodEnd) console.log(`    ${chalk.gray(relativeDays(u.periodEnd) + '  ·  ' + u.periodEnd)}`);
       for (const [product, pct] of Object.entries(u.productUsage || {})) {
         console.log(`    ${chalk.gray(product.padEnd(14))} ${paintPercent(pct)}`);
       }
@@ -249,8 +275,13 @@ ${chalk.bold('  Usage')}
     ${chalk.cyan(`${CMD} switch <name>`)}       Copy an archived account into the live auth.json
     ${chalk.cyan(`${CMD} list`)}                List archived accounts
     ${chalk.cyan(`${CMD} list --usage`)}        List accounts and fetch live quota
-    ${chalk.cyan(`${CMD} usage [name...]`)}     Show weekly / monthly usage for accounts
+    ${chalk.cyan(`${CMD} usage [name...]`)}     Show weekly / monthly usage, reset time & quota
     ${chalk.cyan(`${CMD} where`)}               Print the resolved paths
+
+${chalk.bold('  Usage output')}
+    Each window shows a bar, a percentage, an allowance total, and when it
+    rolls over, e.g. ${chalk.white('Resets: October 18, 21:37, 2026 (in 6d 2h)')}
+    (local time; the countdown turns yellow inside a day, red once due).
 
 ${chalk.bold('  How it works')}
     ${chalk.gray('•')} Grok keeps its session in ${chalk.white('~/.grok/auth.json')} (map of scope → tokens).

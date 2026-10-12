@@ -33,6 +33,11 @@ Node.js CLI，管理多個 Grok CLI 帳號。**對外指令名稱：`MultiGrokSt
 - 週報表：`config.creditUsagePercent`（無上限方案不存在此欄位）、`currentPeriod`、`productUsage[]`。
   月報表：`config.{monthlyLimit,used,history}`，格式不同。
   金額欄位包成 `{ val: n }`。
+- **reset 時間**：週用 `config.currentPeriod.end`、月用 `config.billingPeriodEnd`。
+  格式是 RFC 3339 + numeric offset + 微秒（`…T13:37:26.239595+00:00`），
+  `Date.parse` 可吃。顯示本地時區，與 Grok CLI 面板一致（`October 18, 21:37`）。
+  時間工具都在 `src/usage.js`：`parseTimestamp` / `formatResetTime` / `formatCountdown` / `daysUntil`。
+  `daysUntil` 用 **floor**（ceil 會讓 `6d 2h` 顯示成 7d，跟倒數自相矛盾）。
 
 ## 約定
 - 存檔路徑：`~/.grok/accounts/<name>_auth.json`。
@@ -42,14 +47,14 @@ Node.js CLI，管理多個 Grok CLI 帳號。**對外指令名稱：`MultiGrokSt
 
 ## 檔案
 - `src/accounts.js` — auth.json 解析、存檔讀寫、JWT decode、`updateAccountCredential`（refresh 後寫回）
-- `src/usage.js` — billing 端點、token refresh、payload 正規化
+- `src/usage.js` — billing 端點、token refresh、payload 正規化、reset 時間格式化
 - `src/commands.js` — login / logout / switch
-- `src/cli.js` — chalk 輸出與指令分派
-- `test/run.js` — 離線測試 harness（mock API + 暫存 GROK_HOME），`npm test`
+- `src/cli.js` — chalk 輸出與指令分派（含 `resetLine`）
+- `test/run.js` — 離線測試 harness（mock API + 暫存 GROK_HOME），`npm test`（37 項）
 - `install.cmd` / `install.ps1` — 一鍵安裝（CRLF、純 ASCII、SHA-based fetch）
 - `.gitattributes` — `*.cmd -text`（見上方紅線，勿改回 `eol=crlf`）
 
 ## 測試
-- `npm test` = `node test/run.js`，21 項檢查，不碰真實 `~/.grok`。
+- `npm test` = `node test/run.js`，37 項檢查，不碰真實 `~/.grok`。
 - 重要：`fetchUsage(cred, { onTokenRefreshed })` 的 callback **必須傳**，否則 refresh 的新 token 不會寫回存檔。
 - Windows 上用 async `spawn` 而非 `spawnSync`（後者對同一 node binary 會 EBUSY）。
