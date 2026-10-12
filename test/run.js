@@ -413,6 +413,45 @@ async function main() {
     check('unreachable repo degrades to ok:false', offline.ok === false, JSON.stringify(offline));
     check('unreachable repo explains itself', /github|reach/i.test(offline.reason || ''), offline.reason);
 
+    // The installer leaves the checkout detached at FETCH_HEAD. `git pull` is
+    // a silent no-op there, so the updater must use fetch+reset instead — and
+    // localStatus must report the detached state so callers can tell.
+    check('localStatus reports a detached flag', 'detached' in local, JSON.stringify(local));
+    check('localStatus marks a real branch as not detached', local.detached === false, JSON.stringify(local));
+    check('syncToRemote is exposed for the updater', typeof ver.syncToRemote === 'function');
+    check('isClean is exposed', typeof ver.isClean === 'function');
+    // isClean() is a real oracle, so assert its observable contract rather than
+    // the ambient tree state — a developer editing files mid-run must not fail.
+    check('isClean returns a boolean', typeof (await ver.isClean()) === 'boolean');
+    check('isClean rejects a non-repo path', (await ver.isClean(path.join(sandbox, 'nope'))) === false);
+
+    // A detached HEAD must be detected as detached, not mislabelled as a branch.
+    const detDir = path.join(sandbox, 'detached-probe');
+    {
+      const g = (args) =>
+        new Promise((resolve, reject) => {
+          const c = spawn('git', args, { cwd: detDir, stdio: ['ignore', 'pipe', 'pipe'] });
+          let o = '', e = '';
+          c.stdout.on('data', (d) => (o += d));
+          c.stderr.on('data', (d) => (e += d));
+          c.on('error', reject);
+          c.on('close', (code) => (code === 0 ? resolve(o) : reject(new Error(e || `exit ${code}`))));
+        });
+      fs.mkdirSync(detDir, { recursive: true });
+      try {
+        await g(['init', '-q', '.']);
+        await g(['remote', 'add', 'origin', `https://github.com/${ver.REPO}.git`]);
+        await g(['fetch', '-q', '--depth', '1', 'origin', local.sha]);
+        await g(['checkout', '-q', 'FETCH_HEAD']);
+        const det = await ver.localStatus(detDir);
+        check('detached checkout is flagged detached', det.detached === true, JSON.stringify(det));
+        check('detached checkout has no branch name', det.branch === null, JSON.stringify(det));
+      } catch (err) {
+        check('detached checkout probe ran', false, err.message);
+      }
+      fs.rmSync(detDir, { recursive: true, force: true });
+    }
+
     console.log('\n\x1b[1m13. background update notice\x1b[0m');
     // Seed a cached "behind" record inside the sandbox GROK_HOME and confirm
     // the nudge is printed without any network access.
