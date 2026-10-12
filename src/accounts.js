@@ -98,8 +98,25 @@ export function identityOf(data) {
   return data.user_id || data.principal_id || (data.email ? data.email.toLowerCase() : '') || 'unknown';
 }
 
+/**
+ * Best-effort human name from the profile fields.
+ *
+ * xAI frequently stores the *same* string in both first_name and last_name
+ * (e.g. both "鋒兄"), which would otherwise render as "鋒兄 鋒兄". Collapse
+ * identical halves and fall back to the email rather than returning a
+ * duplicated label.
+ */
 export function displayName(data) {
-  const name = [data.first_name, data.last_name].filter(Boolean).join(' ').trim();
+  const first = (data.first_name || '').trim();
+  const last = (data.last_name || '').trim();
+
+  let name = '';
+  if (first && last) {
+    name = first === last ? first : `${first} ${last}`;
+  } else {
+    name = first || last;
+  }
+
   return name || data.email || identityOf(data);
 }
 

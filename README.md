@@ -62,13 +62,52 @@ node bin/gs.js list          # from the project directory
 ```
 
 ```
-MultiGrokState login <name>     # browser login → snapshot to accounts/<name>_auth.json
-MultiGrokState logout           # delete live auth.json (archives untouched)
+MultiGrokState login [name]     # browser login → snapshot to accounts/<name>_auth.json
+MultiGrokState logout           # archive auth.json as accounts/<email>_auth.json, then delete it
+MultiGrokState logout <name>    # same, but archive under an explicit name
 MultiGrokState switch <name>    # copy an archive back into auth.json
 MultiGrokState usage            # weekly / monthly quota + reset time per account
 MultiGrokState list --usage     # account table + live quota + reset time
+MultiGrokState update           # check GitHub and pull the latest version
 MultiGrokState where            # print resolved paths
 ```
+
+## Updating
+
+`MultiGrokState update` resolves the `main` branch to a commit SHA on GitHub,
+compares it against the local `HEAD`, and — if they differ — runs
+`git pull --ff-only` followed by `npm link`, then reports the new revision.
+
+```
+$ MultiGrokState update --check
+  Checking for updates…
+  repo goldshoot0720/MultiGrokState (main)  ·  ~/.multigrokstate
+
+  ↑ Update available
+    local  de8d410
+    remote 3f9a2c1
+
+  Run MultiGrokState update to install it.
+```
+
+Normal commands also run a **passive** check in the background and print a
+one-line nudge when a newer commit exists:
+
+```
+  ↑ update available MultiGrokState update  (3f9a2c1)
+```
+
+Details worth knowing:
+
+- The check compares **commit SHAs**, not version strings. That mirrors the
+  installer's own update path and sidesteps the CDN cache that serves stale
+  content for branch-name URLs.
+- Results are cached for 6 hours next to your Grok home
+  (`$GROK_HOME/.multigrokstate-update.json`), so the GitHub API is contacted at
+  most once every few hours.
+- The check is **best-effort**: no git, no network, or no remote → it stays
+  silent and the command you actually ran is unaffected.
+- Set `GROK_NO_UPDATE_CHECK=1` to disable the passive check entirely.
 
 ## How it works
 
@@ -113,9 +152,25 @@ just archive the result.
 
 ### `/logout`
 
-Deletes `~/.grok/auth.json`. That is what signs Grok out — the archives under
-`accounts/` are deliberately left alone, which is the entire point of the tool.
-Pass `-k <name>` to snapshot the live session into the archive first.
+Copies the live `auth.json` to `accounts/<email>_auth.json`, **then** deletes
+`auth.json` and `auth.json.lock`. No email is needed from you — the local part
+of the account's address becomes the filename:
+
+| Live account | Archive written |
+| --- | --- |
+| `goldshoot0720@gmail.com` | `~/.grok/accounts/goldshoot0720_auth.json` |
+
+That is what signs Grok out: with `auth.json` gone the CLI has no session.
+Because `auth.json` is a map and `switch` leaves previous identities behind, the
+archive is named after the entry with the **freshest access token** — the one
+Grok would actually use — so the saved file matches the session you just ended.
+
+- Pass a name (`logout myacct`) to archive under something else.
+- If `accounts/<name>_auth.json` already exists it is **left as-is** rather than
+  overwritten (the archive on disk may hold newer rotated tokens); pass `-f` /
+  `--force` to overwrite.
+- If the live session carries no email the file is deleted without an archive
+  and the CLI says so.
 
 ### `/switch`
 
@@ -123,6 +178,30 @@ Reads an archive and **merges** it into the live `auth.json`, then writes
 atomically with owner-only permissions (`0600`). Grok hot-reloads this file, so
 already-running TUI sessions pick up the new account on their next API call —
 no restart needed.
+
+### Account identity
+
+`list` and `usage` identify each archive by its **email**, because that is the
+field that actually distinguishes two accounts:
+
+```
+  #  name            account                       token
+──────────────────────────────────────────────────────────────
+  ▶  1 work            goldshoot0720@gmail.com  鋒兄 ● valid in 5h 41m
+     2 personal        someone.else@example.com      ● valid in 3h 12m
+```
+
+Two details behind that column:
+
+- The email leads, with the profile name appended only when it adds
+  information. xAI frequently stores the **same string in both `first_name`
+  and `last_name`** (e.g. both `鋒兄`), which would otherwise render as the
+  nonsensical `鋒兄 鋒兄`. `displayName()` collapses identical halves.
+- Column padding counts **CJK glyphs as two cells**, so a name like `鋒兄` does
+  not push the status column out of alignment.
+
+If an archive has no email the column shows `(no email)` and the row falls back
+to the profile name or the archive name.
 
 ### Usage / quota
 
@@ -221,6 +300,9 @@ the field layout Grok uses (`key`, `refresh_token`, `expires_at` as an RFC3339
 | `GROK_HOME` | `~/.grok` | Grok CLI home; `auth.json` lives here |
 | `GROK_STATE_HOME` | `$GROK_HOME` | Where `accounts/` is stored |
 | `GROK_BIN` | auto-detected | Path to the `grok` executable |
+| `GROK_NO_UPDATE_CHECK` | unset | Set to `1` to disable the background update check |
+| `GROK_BILLING_URL` | xAI proxy | Override the billing endpoint (used by the test harness) |
+| `GROK_TOKEN_URL` | `auth.x.ai` | Override the token-refresh endpoint (used by the test harness) |
 
 ## Layout
 
@@ -230,6 +312,7 @@ src/paths.js       path resolution + name sanitising
 src/accounts.js    auth.json parsing, archive read/write, JWT decode
 src/usage.js       billing endpoint, token refresh, response normalisation
 src/commands.js    login / logout / switch implementations
+src/version.js     update checking (local HEAD vs GitHub SHA, TTL cache)
 src/cli.js         chalk rendering + command dispatch
 test/run.js        local test harness (mock API + isolated GROK_HOME)
 install.ps1        PowerShell installer (irm ... | iex)
@@ -252,16 +335,23 @@ The harness never touches your real `~/.grok`. It creates a throwaway
 `GROK_HOME`, seeds fake accounts, and points the code at a local mock server
 that reproduces xAI's behaviour — including the **401 → refresh → 200** flow.
 
+The mock URL is injected through `GROK_BILLING_URL` / `GROK_TOKEN_URL`, so
+**`src/usage.js` is never rewritten on disk**. (An earlier version patched the
+file in place and restored it in a `finally` block; a killed run left the real
+CLI pointing at a dead localhost port. A test guards against that regression.)
+
 ```bash
-npm test              # run all 37 checks
+npm test              # run all 72 checks
 node test/run.js --keep   # keep the sandbox for manual poking
 ```
 
-Covered: archive listing, active-account detection, usage rendering (reported
-and derived percentages), reset-time formatting (date, countdown, timezone
-handling, malformed input), token rotation persistence, switch, logout (live
-file removed, archives kept), `logout -k` backup, unknown-account errors and
-path traversal rejection.
+Covered: archive listing, active-account detection, email/display-name
+identity (including collapsed duplicate names), usage rendering (reported and
+derived percentages), reset-time formatting (date, countdown, timezone
+handling, malformed input), token rotation persistence, switch, logout
+(archives the live session under its email, removes `auth.json` and
+`auth.json.lock`, keeps existing archives, `-f` force-overwrite), unknown-account
+errors, path traversal rejection, and source-file integrity.
 
 ## Security
 

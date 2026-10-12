@@ -46,6 +46,9 @@ const accounts = {
   alpha: { creditUsagePercent: 83.5, weekly: 83.5, monthly: 41.2, limit: 500, used: 206 },
   beta: { creditUsagePercent: null, weekly: null, monthly: 5.0, limit: 0, used: 18 },
   gamma: { creditUsagePercent: 12.0, weekly: 12.0, monthly: 3.1, limit: 1000, used: 31 },
+  // Real xAI profiles often store the same string in first_name and
+  // last_name; `list` must show the email, not "鋒兄 鋒兄".
+  delta: { creditUsagePercent: 50.0, weekly: 50.0, monthly: 10.0, limit: 200, used: 100 },
 };
 
 const server = http.createServer((req, res) => {
@@ -127,7 +130,7 @@ const server = http.createServer((req, res) => {
 /* Sandbox fixtures                                                    */
 /* ------------------------------------------------------------------ */
 
-function makeAuth(account, refreshToken, { expired = true } = {}) {
+function makeAuth(account, refreshToken, { expired = true, profile } = {}) {
   return {
     [`https://auth.x.ai::${CLIENT_ID}`]: {
       key: staleToken(account),
@@ -143,6 +146,7 @@ function makeAuth(account, refreshToken, { expired = true } = {}) {
         : new Date(Date.now() + 7 * 86_400_000).toISOString(),
       oidc_issuer: 'https://auth.x.ai',
       oidc_client_id: CLIENT_ID,
+      ...(profile || {}),
     },
   };
 }
@@ -153,6 +157,9 @@ function makeAuth(account, refreshToken, { expired = true } = {}) {
 
 let pass = 0;
 let fail = 0;
+
+/** Mock-server URLs, filled in by main() once the port is known. */
+let MOCK_ENDPOINTS = {};
 
 function check(label, condition, detail = '') {
   if (condition) {
@@ -167,12 +174,16 @@ function check(label, condition, detail = '') {
 /**
  * Run the CLI in the sandbox. Uses async spawn because Windows can throw
  * EBUSY when spawnSync re-enters the same node binary.
+ *
+ * Endpoints are injected through `MOCK_ENDPOINTS` (set in main) as env vars
+ * — never by rewriting src/usage.js, which could leave the source corrupted
+ * if the process was killed before its restore ran.
  */
-function runGs(args) {
+function runGs(args, endpoints = MOCK_ENDPOINTS) {
   return new Promise((resolve) => {
     const child = spawn(NODE, [gs, ...args], {
       cwd: root,
-      env: { ...process.env, GROK_HOME: sandbox },
+      env: { ...process.env, GROK_HOME: sandbox, ...endpoints },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -194,14 +205,12 @@ async function main() {
   console.log(`  sandbox : ${sandbox}`);
   console.log(`  mock api: ${base}\n`);
 
-  // Rewrite endpoints to the mock server for the duration of the test.
-  const usagePath = path.join(root, 'src', 'usage.js');
-  const original = fs.readFileSync(usagePath, 'utf8');
-  const patched = original
-    .replace(/const BILLING_URL = '[^']+'/, `const BILLING_URL = '${base}/v1/billing'`)
-    .replace(/const TOKEN_URL = '[^']+'/, `const TOKEN_URL = '${base}/oauth2/token'`);
-  fs.writeFileSync(usagePath, patched);
-  const restoreUsage = () => fs.writeFileSync(usagePath, original);
+  // Point the CLI at the mock server through env vars. The source file is
+  // never modified, so a crashed or concurrent run cannot corrupt it.
+  MOCK_ENDPOINTS = {
+    GROK_BILLING_URL: `${base}/v1/billing`,
+    GROK_TOKEN_URL: `${base}/oauth2/token`,
+  };
 
   try {
     const accountsDir = path.join(sandbox, 'accounts');
@@ -222,11 +231,44 @@ async function main() {
       path.join(accountsDir, 'gamma_auth.json'),
       JSON.stringify(makeAuth('gamma', 'refresh-gamma', { expired: false }), null, 2)
     );
+    // Same string in both name fields — the duplicate-name regression case.
+    fs.writeFileSync(
+      path.join(accountsDir, 'delta_auth.json'),
+      JSON.stringify(
+        makeAuth('delta', 'refresh-delta', {
+          profile: { first_name: '鋒兄', last_name: '鋒兄', email: 'goldshoot0720@gmail.com' },
+        }),
+        null,
+        2
+      )
+    );
 
     console.log('\x1b[1m1. list\x1b[0m');
     const list = await runGs(['list']);
-    check('lists all three archives', ['alpha', 'beta', 'gamma'].every((n) => list.stdout.includes(n)), list.stdout);
+    check('lists every archive', ['alpha', 'beta', 'gamma', 'delta'].every((n) => list.stdout.includes(n)), list.stdout);
     check('alpha marked active (matches live auth.json)', /▶.*alpha/s.test(list.stdout), list.stdout);
+
+    // The account column must show the email — it is what distinguishes two
+    // archives belonging to the same person.
+    check('list shows the account email', list.stdout.includes('alpha@example.com'), list.stdout);
+    check('every account shows an email', (() => {
+      const expected = {
+        alpha: 'alpha@example.com',
+        beta: 'beta@example.com',
+        gamma: 'gamma@example.com',
+        delta: 'goldshoot0720@gmail.com',
+      };
+      return Object.entries(expected).every(([name, mail]) => {
+        // The name and its email must appear on the same row.
+        const row = list.stdout.split('\n').find((l) => l.includes(name));
+        return row && row.includes(mail);
+      });
+    })(), list.stdout);
+    check('column header names the email field', /account/.test(list.stdout), list.stdout);
+
+    // A profile with first_name === last_name must not render "鋒兄 鋒兄".
+    check('duplicate first/last name is collapsed', !list.stdout.includes('鋒兄 鋒兄'), list.stdout);
+    check('duplicate-name account still shows its email', list.stdout.includes('goldshoot0720@gmail.com'), list.stdout);
 
     console.log('\n\x1b[1m2. usage  (stale tokens -> 401 -> refresh -> 200)\x1b[0m');
     const usage = await runGs(['usage']);
@@ -249,21 +291,44 @@ async function main() {
     const live = JSON.parse(fs.readFileSync(path.join(sandbox, 'auth.json'), 'utf8'));
     check('live auth.json now holds beta', Object.values(live)[0].email === 'beta@example.com', JSON.stringify(live));
 
-    console.log('\n\x1b[1m5. logout  (removes live auth.json, keeps archives)\x1b[0m');
+    console.log('\n\x1b[1m5. logout  (archives by email, then removes auth.json + lock)\x1b[0m');
+    fs.writeFileSync(path.join(sandbox, 'auth.json.lock'), '{"pid":1234}');
     const lo = await runGs(['logout']);
     check('logout reports signed out', lo.stdout.includes('Signed out'), lo.stdout + lo.stderr);
     check('live auth.json is gone', !fs.existsSync(path.join(sandbox, 'auth.json')));
-    check('archives survive', fs.readdirSync(accountsDir).length === 3);
+    check('auth.json.lock is gone', !fs.existsSync(path.join(sandbox, 'auth.json.lock')));
+    check(
+      'live session archived under its email',
+      fs.existsSync(path.join(accountsDir, 'beta_auth.json')),
+      lo.stdout + lo.stderr
+    );
+    check('logout names the archive it wrote', lo.stdout.includes('beta_auth.json'), lo.stdout + lo.stderr);
+    check('logout still lists the archives', (() => {
+      const listAfter = fs.readdirSync(accountsDir);
+      return ['alpha', 'beta', 'gamma', 'delta'].every((n) => listAfter.includes(`${n}_auth.json`));
+    })(), lo.stdout);
 
     console.log('\n\x1b[1m6. usage works with no live auth.json\x1b[0m');
     const usage2 = await runGs(['usage', 'gamma']);
     check('gamma still queryable after logout', usage2.stdout.includes('12.0%'), usage2.stdout);
 
-    console.log('\n\x1b[1m7. logout -k  (backup before delete)\x1b[0m');
+    console.log('\n\x1b[1m7. logout  (explicit name, never clobbers an archive)\x1b[0m');
     await runGs(['switch', 'gamma']);
-    const lo2 = await runGs(['logout', '-k', 'gamma_backup']);
-    check('backup written on logout -k', fs.existsSync(path.join(accountsDir, 'gamma_backup_auth.json')), lo2.stdout + lo2.stderr);
+    // Pre-existing archive that must survive untouched without -f.
+    const gammaFile = path.join(accountsDir, 'gamma_auth.json');
+    const gammaBefore = fs.readFileSync(gammaFile, 'utf8');
+    const lo2 = await runGs(['logout']);
+    check('existing archive is kept, not overwritten', fs.readFileSync(gammaFile, 'utf8') === gammaBefore);
+    check('logout says the archive already existed', /already existed/i.test(lo2.stdout), lo2.stdout + lo2.stderr);
     check('live auth.json removed again', !fs.existsSync(path.join(sandbox, 'auth.json')));
+
+    await runGs(['switch', 'gamma']);
+    const lo3 = await runGs(['logout', '-f']);
+    check('-f overwrites the existing archive', lo3.stdout.includes('archived to'), lo3.stdout);
+
+    await runGs(['switch', 'beta']);
+    const lo4 = await runGs(['logout', 'renamed']);
+    check('explicit name wins over the email', fs.existsSync(path.join(accountsDir, 'renamed_auth.json')), lo4.stdout);
 
     console.log('\n\x1b[1m8. error handling\x1b[0m');
     const bad = await runGs(['switch', 'does-not-exist']);
@@ -306,8 +371,93 @@ async function main() {
       const cdDays = parseInt(cd, 10);
       return d <= cdDays;
     })(), `${fd.daysUntil(plusOffset)} vs ${fd.formatCountdown(plusOffset)}`);
+
+    console.log('\n\x1b[1m11. display name / email identity\x1b[0m');
+    const acct = await import(pathToFileURL(path.join(root, 'src', 'accounts.js')).href);
+
+    check('normal first+last name is joined', acct.displayName({ first_name: 'John', last_name: 'Doe' }) === 'John Doe');
+    check('identical first/last name is not duplicated', acct.displayName({ first_name: '鋒兄', last_name: '鋒兄' }) === '鋒兄');
+    check('only first name works', acct.displayName({ first_name: 'John', last_name: '' }) === 'John');
+    check('only last name works', acct.displayName({ first_name: '', last_name: 'Doe' }) === 'Doe');
+    check('falls back to email when nameless', acct.displayName({ email: 'x@y.com' }) === 'x@y.com');
+    check('never returns an empty string', acct.displayName({}) === 'unknown', acct.displayName({}));
+
+    // The list command must not leak a duplicated name into its output.
+    const rawList = await runGs(['list']);
+    check('list output contains no duplicated name', !/鋒兄\s+鋒兄/.test(rawList.stdout), rawList.stdout);
+    // Every row must carry an email so accounts are distinguishable.
+    const rows = rawList.stdout.split('\n').filter((l) => /[▶\s]\s*\d+\s+\S+\s+\S+@\S+/.test(l));
+    check('list renders at least one email row', rows.length >= 4, `matched ${rows.length} rows`);
+
+    console.log('\n\x1b[1m12. version comparison logic\x1b[0m');
+    const ver = await import(pathToFileURL(path.join(root, 'src', 'version.js')).href);
+    check('exposes the repo coordinate', ver.REPO === 'goldshoot0720/MultiGrokState', ver.REPO);
+    check('exposes the tracked branch', ver.BRANCH === 'main', ver.BRANCH);
+    check('shortSha trims to 7 chars', ver.shortSha('de8d410f7ad8c2d1') === 'de8d410');
+    check('shortSha handles null', ver.shortSha(null) === 'unknown');
+
+    const local = await ver.localStatus();
+    check('localStatus resolves a commit SHA offline', typeof local.sha === 'string' && /^[0-9a-f]{40}$/.test(local.sha), JSON.stringify(local));
+
+    // The git-protocol resolver must not depend on the REST API, which is
+    // rate-limited to 60 req/h per IP and is often exhausted on shared links.
+    check('remoteShaGit is a separate, git-based resolver', typeof ver.remoteShaGit === 'function');
+    check('remoteShaApi is exposed', typeof ver.remoteShaApi === 'function');
+
+    // A network failure must degrade to ok:false, never throw.
+    const offline = await ver.checkForUpdate({ repo: 'goldshoot0720/nonexistent-repo-xyz-000' });
+    check('unreachable repo degrades to ok:false', offline.ok === false, JSON.stringify(offline));
+    check('unreachable repo explains itself', /github|reach/i.test(offline.reason || ''), offline.reason);
+
+    console.log('\n\x1b[1m13. background update notice\x1b[0m');
+    // Seed a cached "behind" record inside the sandbox GROK_HOME and confirm
+    // the nudge is printed without any network access.
+    const cachePath = path.join(sandbox, '.multigrokstate-update.json');
+    fs.writeFileSync(
+      cachePath,
+      JSON.stringify({
+        ok: true,
+        current: 'de8d410f7ad8c2d1438690485b1d799d201f1485',
+        latest: 'abc1234ffffffffffffffffffffffffffffffff',
+        behind: true,
+        checkedAt: Date.now(),
+      })
+    );
+    const nudged = await runGs(['list']);
+    check('behind cache prints an update nudge', /update available/i.test(nudged.stdout), nudged.stdout);
+    check('nudge names the update command', /MultiGrokState update/.test(nudged.stdout), nudged.stdout);
+
+    // The opt-out must silence it entirely.
+    const quiet = await new Promise((resolve) => {
+      const child = spawn(NODE, [gs, 'list'], {
+        cwd: root,
+        env: { ...process.env, GROK_HOME: sandbox, GROK_NO_UPDATE_CHECK: '1' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      child.stdout.on('data', (c) => (stdout += c));
+      child.on('close', () => resolve(stdout));
+    });
+    check('GROK_NO_UPDATE_CHECK=1 silences the nudge', !/update available/i.test(quiet), quiet);
+
+    console.log('\n\x1b[1m14. update --check\x1b[0m');
+    // No network in the harness sandbox guarantees the graceful path, but the
+    // command must always exit 0 and never crash.
+    const upd = await runGs(['update', '--check']);
+    check('update --check exits cleanly', upd.status === 0, upd.stderr);
+    check('update --check reports a status line', /Checking for updates|up to date|Could not check|Update available/i.test(upd.stdout), upd.stdout);
+
+    console.log('\n\x1b[1m15. harness leaves the source untouched\x1b[0m');
+    // Regression guard: the harness once patched src/usage.js in place and
+    // restored it in `finally`. A killed run left the real CLI pointed at a
+    // dead localhost port. Env-var injection must keep the file pristine.
+    const usageSrc = fs.readFileSync(path.join(root, 'src', 'usage.js'), 'utf8');
+    check('src/usage.js has no localhost URL', !/127\.0\.0\.1|localhost/.test(usageSrc), usageSrc.match(/.*localhost.*/)?.[0] || '');
+    check('src/usage.js keeps the real billing host', usageSrc.includes('cli-chat-proxy.grok.com'), '');
+    check('src/usage.js keeps the real token host', usageSrc.includes('auth.x.ai/oauth2/token'), '');
+    check('endpoints are env-overridable', /process\.env\.GROK_BILLING_URL/.test(usageSrc) && /process\.env\.GROK_TOKEN_URL/.test(usageSrc), '');
   } finally {
-    restoreUsage();
+    // No source restore needed — src/usage.js is never modified.
     server.close();
     if (!KEEP) fs.rmSync(sandbox, { recursive: true, force: true });
     else console.log(`\n  \x1b[90msandbox kept at ${sandbox}\x1b[0m`);

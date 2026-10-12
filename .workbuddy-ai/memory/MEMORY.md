@@ -45,16 +45,56 @@ Node.js CLI，管理多個 Grok CLI 帳號。**對外指令名稱：`MultiGrokSt
 - 帳號名稱需 sanitize（禁 `/\`、空白轉 `_`），避免路徑逃逸。
 - 只用官方端點：`auth.x.ai`、`cli-chat-proxy.grok.com`。
 
+## login / logout 語意（使用者明確定義，勿改）
+- `login [name]` → 跑 `grok login` 產生 `auth.json` → 複製成 `accounts/<name>_auth.json`（live 檔保留）。
+- `logout` → **先複製** `auth.json` 成 `accounts/<email>_auth.json`（取 email local part，
+  例 `goldshoot0720@gmail.com` → `goldshoot0720_auth.json`）**→ 再刪 `auth.json` 與 `auth.json.lock`**。
+  - 顯式 name 可覆蓋檔名：`logout <name>`。
+  - **既有存檔不覆蓋**（磁碟上可能有更新 rotate 過的 token），要 `-f` / `--force` 才強制。
+  - auth.json 是 map 且 `switch` 會殘留舊 identity → 存檔名要取
+    **access token 最新（expiresAt 最大）** 那筆（`resolveLiveIdentity()`），
+    不是簡單的 `primaryCredential().email`。
+
 ## 檔案
 - `src/accounts.js` — auth.json 解析、存檔讀寫、JWT decode、`updateAccountCredential`（refresh 後寫回）
 - `src/usage.js` — billing 端點、token refresh、payload 正規化、reset 時間格式化
-- `src/commands.js` — login / logout / switch
-- `src/cli.js` — chalk 輸出與指令分派（含 `resetLine`）
-- `test/run.js` — 離線測試 harness（mock API + 暫存 GROK_HOME），`npm test`（37 項）
+- `src/commands.js` — login / logout / switch（logout 含 `resolveLiveIdentity()`）
+- `src/cli.js` — chalk 輸出與指令分派（含 `resetLine`、`cmdUpdate`）
+- `src/version.js` — 更新檢查（local HEAD vs remote SHA、git fallback、TTL 快取）
+- `test/run.js` — 離線測試 harness（mock API + 暫存 GROK_HOME），`npm test`（74 項）
 - `install.cmd` / `install.ps1` — 一鍵安裝（CRLF、純 ASCII、SHA-based fetch）
 - `.gitattributes` — `*.cmd -text`（見上方紅線，勿改回 `eol=crlf`）
 
+## 更新檢查（update / 背景提示）
+- 邏輯在 **`src/version.js`**；`update` / `update --check` 在 `src/cli.js` 的 `cmdUpdate()`。
+- 比對的是 **commit SHA**（local `git rev-parse HEAD` vs remote branch tip），不是版本字串。
+- **⚠️ GitHub REST API 會 rate limit（未認證 60 req/h per IP，共享 IP 常態 403），
+  `git ls-remote` 不會。** 所以 `remoteSha()` 必須「API 優先 + git fallback」，
+  絕對不能只靠 API，否則使用者端會常態性「檢查失敗」。
+- 背景檢查有 6h TTL 快取：`$GROK_HOME/.multigrokstate-update.json`。
+- `GROK_NO_UPDATE_CHECK=1` 可完全關閉背景檢查。
+- 背景提示靠 `globalThis.__gsUpdateNotice` + `flushUpdateNotice()`，
+  由 `bin/gs.js` 在指令結束後延遲 60ms 印出（避免阻塞）。
+
+## 測試 harness 紅線
+- **絕對不要改寫 production source 檔**（如 `src/usage.js` 的 URL 常數）。
+  曾經因此把 `127.0.0.1:3690` 留在 source 裡（中斷沒還原）→ 之後所有測試 401 全掛，
+  看起來像功能壞掉其實是測試汙染。
+- 正確做法：`src/usage.js` 的端點讀 `process.env.GROK_BILLING_URL` / `GROK_TOKEN_URL`，
+  harness 用 env var（`MOCK_ENDPOINTS`）注入，source 永不修改。
+- `test/run.js` 第 15 節就是防這個回歸的。
+
+## 帳號識別顯示（list / usage）
+- **一律以 email 識別帳號**，不用 profile name — 同一人的多個 archive
+  name 可能完全一樣，email 才有區分度。
+- **xAI 常把同一字串同時放進 `first_name` 和 `last_name`**（實例：兩者都是 `鋒兄`），
+  舊的 `.join(' ')` 會產生 `鋒兄 鋒兄`。`displayName()` 已改成 first===last 時只留一份。
+- 欄位對齊要用 `displayWidth()`：**CJK 算 2 格**、ANSI escape 算 0 格。
+  用 `String.length` 會讓 `鋒兄` 之後的欄位全部歪掉。
+- `list` 的 account 欄：email 在前，名字只在「有額外資訊且塞得下」時附加。
+
 ## 測試
-- `npm test` = `node test/run.js`，37 項檢查，不碰真實 `~/.grok`。
+- `npm test` = `node test/run.js`，**74 項**檢查，不碰真實 `~/.grok`。
 - 重要：`fetchUsage(cred, { onTokenRefreshed })` 的 callback **必須傳**，否則 refresh 的新 token 不會寫回存檔。
 - Windows 上用 async `spawn` 而非 `spawnSync`（後者對同一 node binary 會 EBUSY）。
+- ESM 在 Windows 不能 `import(絕對路徑)`，要用 `pathToFileURL(...).href`。

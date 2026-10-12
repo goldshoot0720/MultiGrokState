@@ -12,8 +12,8 @@
  * https://auth.x.ai/oauth2/token when the stored token is stale.
  */
 
-const BILLING_URL = 'https://cli-chat-proxy.grok.com/v1/billing';
-const TOKEN_URL = 'https://auth.x.ai/oauth2/token';
+const BILLING_URL = process.env.GROK_BILLING_URL || 'https://cli-chat-proxy.grok.com/v1/billing';
+const TOKEN_URL = process.env.GROK_TOKEN_URL || 'https://auth.x.ai/oauth2/token';
 const USER_AGENT = 'multi-grok-state/1.0';
 
 /** Unwrap either a bare number or xAI's `{ val: n }` money wrapper. */

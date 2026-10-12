@@ -1,9 +1,12 @@
+import { spawn } from 'node:child_process';
+
 import chalk from 'chalk';
 
 import { listAccounts, readLiveAuth, primaryCredential, displayName, identityOf, humanExpiry, updateAccountCredential } from './accounts.js';
 import { fetchUsage, bar, formatResetTime, formatCountdown, daysUntil, parseTimestamp } from './usage.js';
 import { login, logout, switchTo, findGrokBinary } from './commands.js';
 import { accountsDir, authJsonPath } from './paths.js';
+import { ROOT, REPO, BRANCH, checkForUpdate, cachedUpdateNotice, shortSha } from './version.js';
 
 const STATUS_STYLE = {
   valid: (s) => chalk.green(s),
@@ -16,6 +19,75 @@ const STATUS_STYLE = {
 function statusChip(state) {
   const paint = STATUS_STYLE[state] || chalk.gray;
   return paint(`● ${state}`);
+}
+
+/**
+ * Terminal display width of a string.
+ *
+ * Counts ANSI escapes as zero (chalk wraps text in them) and CJK/wide
+ * glyphs as two cells, which `.length` does not. Without this, a name like
+ * "鋒兄" misaligns every column to its right.
+ */
+function displayWidth(text) {
+  const stripped = text.replace(/\u001b\[[0-9;]*m/g, '');
+  let width = 0;
+  for (const ch of stripped) {
+    const cp = ch.codePointAt(0);
+    const wide =
+      (cp >= 0x1100 && cp <= 0x115f) || // Hangul Jamo
+      (cp >= 0x2e80 && cp <= 0xa4cf) || // CJK radicals … Yi
+      (cp >= 0xac00 && cp <= 0xd7a3) || // Hangul syllables
+      (cp >= 0xf900 && cp <= 0xfaff) || // CJK compatibility ideographs
+      (cp >= 0xfe30 && cp <= 0xfe6f) || // CJK compatibility forms
+      (cp >= 0xff00 && cp <= 0xff60) || // fullwidth forms
+      (cp >= 0xffe0 && cp <= 0xffe6) ||
+      (cp >= 0x20000 && cp <= 0x3fffd); // CJK ext. B+
+    width += wide ? 2 : 1;
+  }
+  return width;
+}
+
+/** Pad a (possibly colourised) string to a terminal display width. */
+function padVisible(text, width) {
+  return text + ' '.repeat(Math.max(0, width - displayWidth(text)));
+}
+
+/** Truncate to a display width, never splitting an ANSI escape sequence. */
+function truncateVisible(text, width) {
+  if (displayWidth(text) <= width) return text;
+  let out = '';
+  let used = 0;
+  for (const ch of text.replace(/\u001b\[[0-9;]*m/g, '')) {
+    const w = displayWidth(ch);
+    if (used + w > width) break;
+    out += ch;
+    used += w;
+  }
+  return out;
+}
+
+/**
+ * The "account" column. The email is the field that actually distinguishes
+ * two archives, so it leads; the profile name is only appended when it adds
+ * information (it often can't — see displayName()).
+ */
+function accountLabel(a, width = 30) {
+  if (!a.email) {
+    const fallback = a.displayName && a.displayName !== a.name ? a.displayName : '(no email)';
+    return padVisible(chalk.gray(truncateVisible(fallback, width)), width);
+  }
+
+  const name = a.displayName && a.displayName !== a.email ? a.displayName : null;
+  const withName = name ? `${a.email}  ${name}` : a.email;
+
+  // Prefer "email  name"; fall back to the bare email so the distinguishing
+  // field is never the thing that gets cut off.
+  const text =
+    name && displayWidth(withName) <= width
+      ? `${chalk.white(a.email)}  ${chalk.gray(name)}`
+      : chalk.white(truncateVisible(a.email, width));
+
+  return padVisible(text, width);
 }
 
 /** Colour a usage percentage by how close it is to the cap. */
@@ -107,8 +179,8 @@ async function cmdList(argv) {
   console.log(
     '  ' +
       chalk.gray('#  ') +
-      chalk.bold('name'.padEnd(16)) +
-      chalk.bold('account'.padEnd(30)) +
+      padVisible(chalk.bold('name'), 16) +
+      padVisible(chalk.bold('account'), 30) +
       chalk.bold('token')
   );
   console.log(rule());
@@ -116,8 +188,8 @@ async function cmdList(argv) {
   for (const [i, a] of accounts.entries()) {
     const active = liveId && a.credential && identityOf(a.credential.data) === liveId;
     const marker = active ? chalk.green('▶') : chalk.gray(' ');
-    const name = (active ? chalk.green.bold(a.name) : chalk.white(a.name)).padEnd(active ? 16 : 16);
-    const label = (a.email ? `${a.displayName}` : chalk.gray('(no email)')).slice(0, 28).padEnd(30);
+    const name = padVisible(active ? chalk.green.bold(a.name) : chalk.white(a.name), 16);
+    const label = accountLabel(a);
     const expiry = a.expiresAt ? chalk.gray(humanExpiry(a.expiresAt)) : '';
     console.log(`  ${marker} ${chalk.gray(String(i + 1).padStart(2))} ${name}${label}${statusChip(a.status)} ${expiry}`);
   }
@@ -131,31 +203,35 @@ async function cmdList(argv) {
 
 async function printUsageTable(accounts) {
   console.log(rule('live usage'));
+  // Widen the name gutter if any name would overflow it.
+  const gutter = Math.max(16, ...accounts.map((a) => a.name.length + 2));
   for (const a of accounts) {
     if (!a.credential) {
-      console.log(`  ${chalk.gray(a.name.padEnd(16))}${chalk.red('no credential')}`);
+      console.log(`  ${chalk.gray(a.name.padEnd(gutter))}${chalk.red('no credential')}`);
       continue;
     }
-    process.stdout.write(`  ${chalk.white(a.name.padEnd(16))}`);
+    // Show the email so two archives of the same person stay distinguishable.
+    console.log(`  ${chalk.white(a.name.padEnd(gutter))}${chalk.gray(a.email || '')}`);
     try {
       const u = await fetchUsage(a.credential, {
         onTokenRefreshed: (data) => updateAccountCredential(a.name, data),
       });
       if (!u.ok) {
-        console.log(chalk.red(`✖ ${u.error}`));
+        console.log(`  ${' '.repeat(gutter)}${chalk.red(`✖ ${u.error}`)}`);
         continue;
       }
       const pct = u.creditUsagePercent;
       const period = u.periodType === 'weekly' ? 'wk' : u.periodType === 'monthly' ? 'mo' : '  ';
       const allowance = allowanceText(u);
+      const indent = ' '.repeat(2 + gutter);
       console.log(
-        `${paintBar(pct)} ${paintPercent(pct).padEnd(14)} ${chalk.gray(`[${period}]`)} ${relativeDays(u.periodEnd)}` +
-          (allowance ? `\n  ${' '.repeat(16)}${allowance}` : '')
+        `${indent}${paintBar(pct)} ${paintPercent(pct).padEnd(14)} ${chalk.gray(`[${period}]`)} ${relativeDays(u.periodEnd)}`
       );
+      if (allowance) console.log(`${indent}            ${allowance}`);
       const reset = resetLine(u.periodEnd);
-      if (reset) console.log(`  ${' '.repeat(16)}${reset}`);
+      if (reset) console.log(`${indent}            ${reset}`);
     } catch (err) {
-      console.log(chalk.red(`✖ ${err.message}`));
+      console.log(`  ${' '.repeat(gutter)}${chalk.red(`✖ ${err.message}`)}`);
     }
   }
   console.log(rule());
@@ -237,17 +313,28 @@ async function cmdLogin(argv) {
 }
 
 function cmdLogout(argv) {
-  const keep = argv.includes('--keep') || argv.includes('-k');
+  const force = argv.includes('--force') || argv.includes('-f');
   const name = argv.find((a) => !a.startsWith('-'));
-  const res = logout({ backupName: keep ? name || `backup_${Date.now()}` : null });
+  const res = logout({ name, force });
 
   console.log();
   if (!res.removed) {
     console.log(chalk.yellow('  No live auth.json — already signed out.'));
+    if (res.removedLock) console.log(chalk.gray('    removed a stale auth.json.lock'));
   } else {
     console.log(chalk.green('  ✔ Signed out') + chalk.gray(`  (removed ${authJsonPath()})`));
-    if (res.backedUp) console.log(chalk.gray(`    archived to ${res.backedUp}`));
-    else console.log(chalk.gray('    archived accounts were left untouched'));
+    if (res.removedLock) console.log(chalk.gray(`    removed ${authJsonPath()}.lock`));
+    if (res.backedUp) {
+      console.log(
+        chalk.gray('    archived to ') +
+          chalk.white(res.backedUp) +
+          (res.email ? chalk.gray(`  <${res.email}>`) : '')
+      );
+    } else if (res.kept) {
+      console.log(chalk.gray(`    ${res.name}_auth.json already existed — left as-is (use -f to overwrite)`));
+    } else {
+      console.log(chalk.yellow('    no email in the live session — nothing to archive under'));
+    }
   }
   console.log();
 }
@@ -263,19 +350,129 @@ function cmdSwitch(argv) {
   console.log();
 }
 
+/* ------------------------------------------------------------------ */
+/* Update                                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Pull the latest source and re-link the global command.
+ * Shared by `update` (foreground, streamed) and the passive notice path.
+ */
+function runUpdate({ quiet = false } = {}) {
+  return new Promise((resolve) => {
+    const child = spawn('git', ['-C', ROOT, 'pull', '--ff-only'], {
+      stdio: quiet ? ['ignore', 'ignore', 'pipe'] : 'inherit',
+    });
+    let stderr = '';
+    if (quiet) child.stderr.on('data', (c) => (stderr += c));
+    child.on('error', (err) => resolve({ ok: false, error: err.message }));
+    child.on('close', (code) => resolve({ ok: code === 0, code, stderr }));
+  });
+}
+
+async function cmdUpdate(argv) {
+  const checkOnly = argv.includes('--check') || argv.includes('-c');
+
+  console.log();
+  console.log(chalk.bold.cyan('  Checking for updates…'));
+  console.log(chalk.gray(`  repo ${REPO} (${BRANCH})  ·  ${ROOT}`));
+  console.log();
+
+  const status = await checkForUpdate();
+  if (!status.ok) {
+    console.log(chalk.yellow(`  Could not check for updates: ${status.reason}`));
+    if (status.current) console.log(chalk.gray(`  local ${shortSha(status.current)}`));
+    console.log();
+    return;
+  }
+
+  if (!status.behind) {
+    console.log(chalk.green('  ✔ Already up to date') + chalk.gray(`  (${shortSha(status.current)})`));
+    console.log();
+    return;
+  }
+
+  console.log(chalk.yellow('  ↑ Update available'));
+  console.log(chalk.gray('    local  ') + chalk.white(shortSha(status.current)));
+  console.log(chalk.gray('    remote ') + chalk.white(shortSha(status.latest)));
+  console.log();
+
+  if (checkOnly) {
+    console.log(chalk.gray('  Run ') + chalk.cyan('MultiGrokState update') + chalk.gray(' to install it.'));
+    console.log();
+    return;
+  }
+
+  console.log(chalk.gray('  Pulling latest source…'));
+  console.log();
+  const pull = await runUpdate();
+  if (!pull.ok) {
+    console.log(chalk.red(`  ✖ git pull failed${pull.error ? `: ${pull.error}` : ''}`));
+    console.log(chalk.gray('    The source check out is dirty, diverged, or offline.'));
+    console.log(chalk.gray(`    You can also re-run the installer to refresh ${ROOT}.`));
+    console.log();
+    process.exitCode = 1;
+    return;
+  }
+
+  console.log();
+  console.log(chalk.gray('  Re-linking the global command…'));
+  const link = await new Promise((resolve) => {
+    const child = spawn('npm', ['link', '--no-audit', '--no-fund', '--loglevel=error'], {
+      cwd: ROOT,
+      stdio: 'inherit',
+      shell: process.platform === 'win32',
+    });
+    child.on('error', (err) => resolve({ ok: false, error: err.message }));
+    child.on('close', (code) => resolve({ ok: code === 0, code }));
+  });
+
+  console.log();
+  console.log(chalk.green('  ✔ Updated to ') + chalk.bold.white(shortSha(status.latest)));
+  if (!link.ok) {
+    console.log(chalk.yellow('    npm link failed — the source is updated, but the global command may be stale.'));
+  }
+  console.log();
+}
+
+/**
+ * One-line nudge shown after normal commands when a newer commit exists.
+ * Populated asynchronously by the background check; flushed on exit so it
+ * never delays the command the user actually ran.
+ */
+function updateNoticeLine() {
+  const notice = globalThis.__gsUpdateNotice;
+  if (!notice) return null;
+  return '  ' + chalk.gray('↑ update available ') + chalk.cyan('MultiGrokState update') + chalk.gray(`  (${shortSha(notice.latest)})`);
+}
+
+/** Print the pending notice (if any) once, on the way out. */
+export function flushUpdateNotice() {
+  if (globalThis.__gsUpdateNoticeShown) return;
+  const notice = updateNoticeLine();
+  if (!notice) return;
+  globalThis.__gsUpdateNoticeShown = true;
+  console.log();
+  console.log(notice);
+  console.log();
+}
+
 function cmdHelp() {
   const CMD = 'MultiGrokState';
   console.log(`
 ${chalk.bold.cyan('  MultiGrokState')} ${chalk.gray('— manage multiple Grok CLI accounts')}
 
 ${chalk.bold('  Usage')}
-    ${chalk.cyan(`${CMD} login <name>`)}       Run ${chalk.gray('grok login')} then snapshot auth.json → ${chalk.gray('accounts/<name>_auth.json')}
-    ${chalk.cyan(`${CMD} logout`)}              Delete the live auth.json (archives untouched)
-    ${chalk.cyan(`${CMD} logout -k <name>`)}   Same, but archive the live session first
+    ${chalk.cyan(`${CMD} login [name]`)}       Run ${chalk.gray('grok login')} then snapshot auth.json → ${chalk.gray('accounts/<name>_auth.json')}
+    ${chalk.cyan(`${CMD} logout`)}              Archive auth.json as ${chalk.gray('accounts/<email>_auth.json')}, then delete it
+    ${chalk.cyan(`${CMD} logout <name>`)}       Same, but archive under an explicit name
+    ${chalk.cyan(`${CMD} logout -f`)}           Overwrite an existing archive instead of keeping it
     ${chalk.cyan(`${CMD} switch <name>`)}       Copy an archived account into the live auth.json
     ${chalk.cyan(`${CMD} list`)}                List archived accounts
     ${chalk.cyan(`${CMD} list --usage`)}        List accounts and fetch live quota
     ${chalk.cyan(`${CMD} usage [name...]`)}     Show weekly / monthly usage, reset time & quota
+    ${chalk.cyan(`${CMD} update`)}              Check GitHub and pull the latest version
+    ${chalk.cyan(`${CMD} update --check`)}      Only report whether an update is available
     ${chalk.cyan(`${CMD} where`)}               Print the resolved paths
 
 ${chalk.bold('  Usage output')}
@@ -287,6 +484,8 @@ ${chalk.bold('  How it works')}
     ${chalk.gray('•')} Grok keeps its session in ${chalk.white('~/.grok/auth.json')} (map of scope → tokens).
     ${chalk.gray('•')} ${chalk.cyan('login')} runs the official CLI flow, then copies that file to
       ${chalk.white('~/.grok/accounts/<name>_auth.json')} — the archive.
+    ${chalk.gray('•')} ${chalk.cyan('logout')} copies that file to ${chalk.white('accounts/<email>_auth.json')}
+      first, then deletes ${chalk.white('auth.json')} + ${chalk.white('auth.json.lock')}.
     ${chalk.gray('•')} ${chalk.cyan('switch')} merges an archive back into auth.json; Grok hot-reloads it.
     ${chalk.gray('•')} ${chalk.cyan('usage')} calls ${chalk.gray('cli-chat-proxy.grok.com/v1/billing')} with the
       stored token, refreshing via ${chalk.gray('auth.x.ai/oauth2/token')} when stale.
@@ -294,11 +493,30 @@ ${chalk.bold('  How it works')}
 ${chalk.bold('  Environment')}
     ${chalk.gray('GROK_HOME')}         override ~/.grok
     ${chalk.gray('GROK_BIN')}          path to the grok executable
+    ${chalk.gray('GROK_NO_UPDATE_CHECK=1')}  disable the background update check
 `);
 }
 
 export async function runCli(argv) {
   const [cmd, ...rest] = argv;
+
+  // Suppress the background check when the user is already managing updates
+  // directly, or has opted out.
+  const wantsNotice =
+    process.env.GROK_NO_UPDATE_CHECK !== '1' && cmd !== 'update' && cmd !== 'upgrade';
+
+  if (wantsNotice) {
+    // Never let a slow network stall the real command: give the check a short
+    // grace period, then print whatever the cache already knows.
+    const check = cachedUpdateNotice()
+      .then((notice) => {
+        if (notice) globalThis.__gsUpdateNotice = notice;
+      })
+      .catch(() => {});
+    // Fire-and-forget; the notice is flushed at process exit by the entry point.
+    check.finally(() => flushUpdateNotice());
+  }
+
   switch (cmd) {
     case 'login':
     case 'add':
@@ -313,6 +531,9 @@ export async function runCli(argv) {
       return cmdList(rest);
     case 'usage':
       return cmdUsage(rest);
+    case 'update':
+    case 'upgrade':
+      return cmdUpdate(rest);
     case 'where':
       console.log();
       console.log(chalk.gray('  grok home   ') + chalk.white(authJsonPath()));
