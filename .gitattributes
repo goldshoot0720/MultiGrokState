@@ -1,0 +1,15 @@
+# Windows batch files must use CRLF or cmd.exe misparses them
+# (bare LF causes loops to garble and constructs like for /f to break).
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# PowerShell is happy with either, but be explicit.
+*.ps1 text eol=crlf
+
+# Shell scripts must stay LF.
+*.sh text eol=lf
+
+# JS/MD/JSON: normalise on commit.
+*.js text eol=lf
+*.json text eol=lf
+*.md text eol=lf
