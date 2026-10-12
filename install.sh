@@ -376,8 +376,26 @@ if [ "$NO_LINK" -eq 1 ]; then
 else
   step "Registering the 'MultiGrokState' command..."
   _log="$(mktemp "${TMPDIR:-/tmp}/multigrokstate-link.XXXXXX")"
+  _linked=0
   if ( cd "$INSTALL_DIR" && npm link --no-audit --no-fund --loglevel=error >"$_log" 2>&1 ); then
+    _linked=1
+  else
+    # npm can exit non-zero *after* doing the useful part. On a case-insensitive
+    # filesystem (macOS APFS, Windows NTFS) it aborts with EEXIST when a package
+    # declares two bin names that differ only in case - it creates the first
+    # symlink, then finds the second "already exists" because it is the same
+    # file. The link it did create is perfectly usable, so judge by whether the
+    # command actually resolves rather than by npm's exit code.
+    _prefix="$(npm prefix -g 2>/dev/null || true)"
+    if [ -n "$_prefix" ] && [ -x "$_prefix/bin/MultiGrokState" ]; then
+      _linked=2
+    fi
+  fi
+
+  if [ "$_linked" -eq 1 ]; then
     ok "command registered"
+  elif [ "$_linked" -eq 2 ]; then
+    ok "command registered (npm reported an error, but the link is in place)"
   else
     # Usually EACCES: a system-wide Node (nodejs.org pkg installer, or a
     # Homebrew install on Intel) keeps its global prefix root-owned, so
@@ -387,7 +405,6 @@ else
     mkdir -p "$LINK_DIR"
     chmod +x "$INSTALL_DIR/bin/gs.js" 2>/dev/null || true
     ln -sf "$INSTALL_DIR/bin/gs.js" "$LINK_DIR/MultiGrokState"
-    ln -sf "$INSTALL_DIR/bin/gs.js" "$LINK_DIR/multigrokstate"
     ok "linked into $LINK_DIR"
   fi
   rm -f "$_log"

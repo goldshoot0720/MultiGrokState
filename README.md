@@ -56,15 +56,24 @@ dependencies, register the `MultiGrokState` command globally, and run a smoke
 test. Re-running updates in place; pass `--force` / `-Force` to reinstall from
 scratch.
 
+Exactly one command name is registered. `package.json` used to declare both
+`MultiGrokState` and `multigrokstate`, which is a trap: on a case-insensitive
+filesystem (macOS APFS, Windows NTFS) those are the *same file*, so npm creates
+the first symlink and then aborts with `EEXIST` on the second. `npm link`
+therefore always failed on macOS — after having done the useful part. The
+installers now judge success by whether the command actually resolves rather
+than by npm's exit code, so that case is reported honestly instead of falling
+back for no reason.
+
 Two details specific to the macOS/Linux script:
 
 - It re-executes itself from a temporary copy. `curl … | bash` feeds the
   script to the shell through **stdin**, and the shell reads it incrementally —
   so the first child process that reads stdin (`npm`, `git`, the Xcode Command
   Line Tools prompt) would otherwise swallow the rest of the script.
-- If `npm link` fails (usually `EACCES` from a root-owned global prefix) it
-  falls back to symlinks in `~/.local/bin` and tells you the exact `PATH` line
-  to add.
+- If `npm link` genuinely fails (usually `EACCES` from a root-owned global
+  prefix) it falls back to a symlink in `~/.local/bin` and tells you the exact
+  `PATH` line to add.
 
 PowerShell options — run it as a script block if you need to pass them:
 
