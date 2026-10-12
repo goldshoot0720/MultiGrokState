@@ -205,33 +205,35 @@ async function printUsageTable(accounts) {
   console.log(rule('live usage'));
   // Widen the name gutter if any name would overflow it.
   const gutter = Math.max(16, ...accounts.map((a) => a.name.length + 2));
+  // Usage rows are indented under the account column, past the name gutter.
+  const indent = ' '.repeat(2 + gutter);
   for (const a of accounts) {
     if (!a.credential) {
       console.log(`  ${chalk.gray(a.name.padEnd(gutter))}${chalk.red('no credential')}`);
       continue;
     }
-    // Show the email so two archives of the same person stay distinguishable.
-    console.log(`  ${chalk.white(a.name.padEnd(gutter))}${chalk.gray(a.email || '')}`);
+    // Name + email on one line: the email is what tells two archives of the
+    // same person apart.
+    console.log(`  ${chalk.bold.white(a.name.padEnd(gutter))}${chalk.gray(a.email || '')}`);
     try {
       const u = await fetchUsage(a.credential, {
         onTokenRefreshed: (data) => updateAccountCredential(a.name, data),
       });
       if (!u.ok) {
-        console.log(`  ${' '.repeat(gutter)}${chalk.red(`✖ ${u.error}`)}`);
+        console.log(`${indent}${chalk.red(`✖ ${u.error}`)}`);
         continue;
       }
       const pct = u.creditUsagePercent;
       const period = u.periodType === 'weekly' ? 'wk' : u.periodType === 'monthly' ? 'mo' : '  ';
       const allowance = allowanceText(u);
-      const indent = ' '.repeat(2 + gutter);
       console.log(
         `${indent}${paintBar(pct)} ${paintPercent(pct).padEnd(14)} ${chalk.gray(`[${period}]`)} ${relativeDays(u.periodEnd)}`
       );
-      if (allowance) console.log(`${indent}            ${allowance}`);
+      if (allowance) console.log(`${indent}${' '.repeat(21)}${allowance}`);
       const reset = resetLine(u.periodEnd);
-      if (reset) console.log(`${indent}            ${reset}`);
+      if (reset) console.log(`${indent}${' '.repeat(21)}${reset}`);
     } catch (err) {
-      console.log(`  ${' '.repeat(gutter)}${chalk.red(`✖ ${err.message}`)}`);
+      console.log(`${indent}${chalk.red(`✖ ${err.message}`)}`);
     }
   }
   console.log(rule());
