@@ -59,7 +59,7 @@ REM --- Fetch source ----------------------------------------------------
 
 if exist "!INSTALL_DIR!\package.json" (
     echo.
-    echo   Already installed at !INSTALL_DIR! — updating...
+    echo   Already installed at !INSTALL_DIR! - updating...
 
     set "UPD_SHA="
     for /f "usebackq tokens=*" %%s in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $ProgressPreference='SilentlyContinue'; (Invoke-RestMethod -UseBasicParsing -TimeoutSec 20 -Headers @{'User-Agent'='MultiGrokState-installer';'Accept'='application/vnd.github+json'} -Uri 'https://api.github.com/repos/!REPO!/commits/!BRANCH!').sha } catch { }" 2^>nul`) do set "UPD_SHA=%%s"
@@ -139,7 +139,7 @@ set "LINK_EXIT=!ERRORLEVEL!"
 popd
 
 if !LINK_EXIT! neq 0 (
-    echo   [!!] npm link failed — you can still run: node "!INSTALL_DIR!\bin\gs.js"
+    echo   [!!] npm link failed - you can still run: node "!INSTALL_DIR!\bin\gs.js"
 ) else (
     echo   [ok] command registered
 )
