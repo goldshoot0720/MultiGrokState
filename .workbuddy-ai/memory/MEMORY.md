@@ -108,3 +108,27 @@ Node.js CLI，管理多個 Grok CLI 帳號。**對外指令名稱：`MultiGrokSt
 - 重要：`fetchUsage(cred, { onTokenRefreshed })` 的 callback **必須傳**，否則 refresh 的新 token 不會寫回存檔。
 - Windows 上用 async `spawn` 而非 `spawnSync`（後者對同一 node binary 會 EBUSY）。
 - ESM 在 Windows 不能 `import(絕對路徑)`，要用 `pathToFileURL(...).href`。
+
+## macOS 開發 checkout
+- `/Users/feng33/Documents/MultiGrokState` 原本只是複製過來、**沒有 `.git`**；
+  已 `git init` + `git remote add origin` + `git symbolic-ref HEAD refs/heads/main`
+  + `git reset --mixed origin/main` 接回遠端歷史（這招可保留工作區檔案又接上歷史）。
+- commit 身分：`goldshoot0720 <goldshoot0720@gmail.com>`（repo-local config）。
+- 一鍵安裝腳本：`install.sh`（macOS / Linux，POSIX sh）、`install.ps1`、`install.cmd`。
+
+## ⚠️ raw.githubusercontent.com 的負快取（新檔案）
+**新加入 repo 的檔案，用 branch 路徑抓會回 404，即使 push 完全成功。**
+實測 `install.sh` push 後 `.../main/install.sh` 回 404 約 2 分鐘才變 200；
+同時 `.../<sha>/install.sh`、`cdn.jsdelivr.net/gh/...@main/...`、
+`github.com/.../raw/main/...` **全部都是 200**。
+→ 看到 404 **先別重 push**，用下面方式確認檔案真的在：
+`git ls-tree origin/main --name-only`、`gh api repos/<repo>/contents/<file>`，
+或改用 SHA-pinned URL 驗證內容。
+**驗證「使用者會下載到的那個 URL」時要考慮這個延遲**，別急著判定失敗。
+
+## install.sh 的紅線（詳見當日 log）
+- `curl | bash` 走 stdin → 必須自我重執行成暫存檔 + `< /dev/null`（用 `MG_REEXEC` 防迴圈）。
+- `npm link` 會 chmod bin → 安裝後設 `core.fileMode false`。
+- 優先用 `npm ci`（不寫 lock），失敗才 `npm install`，最後還原 `package-lock.json`。
+- `FORCE` 只能代表「使用者明確要求」；內部重建要用別的旗標，
+  否則會誤授權刪掉外來目錄。
