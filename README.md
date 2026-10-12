@@ -8,6 +8,34 @@ that Grok hot-reloads, plus the official `cli-chat-proxy` billing endpoint.
 
 ## Getting started
 
+### One-line install (Windows)
+
+PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/chbon/MultiGrokState/main/install.ps1 | iex
+```
+
+CMD (no PowerShell required):
+
+```cmd
+curl -fsSL https://raw.githubusercontent.com/chbon/MultiGrokState/main/install.cmd -o install.cmd && install.cmd && del install.cmd
+```
+
+Both scripts check for Node 18+, npm and git, clone the source to
+`%USERPROFILE%\.multigrokstate`, install dependencies, register the
+`MultiGrokState` command globally, and run a smoke test. Re-running updates
+in place; pass `-Force` (PowerShell) to reinstall from scratch.
+
+PowerShell options — run it as a script block if you need to pass them:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/chbon/MultiGrokState/main/install.ps1))) `
+    -InstallDir 'C:\Tools\MultiGrokState' -NoPath
+```
+
+### Manual install
+
 ```bash
 cd D:/CODE/MultiGrokState
 npm install              # only dependency is chalk
@@ -15,7 +43,7 @@ npm link                 # registers `MultiGrokState` globally
 MultiGrokState           # show help
 ```
 
-If you'd rather not install globally, run it in place:
+Run it in place without linking:
 
 ```bash
 node bin/gs.js list          # from the project directory
@@ -158,14 +186,26 @@ the field layout Grok uses (`key`, `refresh_token`, `expires_at` as an RFC3339
 ## Layout
 
 ```
-bin/gs.js          CLI entry point
+bin/gs.js          CLI entry point (the file name is internal; the command is MultiGrokState)
 src/paths.js       path resolution + name sanitising
 src/accounts.js    auth.json parsing, archive read/write, JWT decode
 src/usage.js       billing endpoint, token refresh, response normalisation
 src/commands.js    login / logout / switch implementations
 src/cli.js         chalk rendering + command dispatch
 test/run.js        local test harness (mock API + isolated GROK_HOME)
+install.ps1        PowerShell installer (irm ... | iex)
+install.cmd        CMD installer (curl -o ... && ... && del)
 ```
+
+## Uninstall
+
+```powershell
+npm unlink -g multi-grok-state          # remove the global command
+Remove-Item -Recurse -Force "$env:USERPROFILE\.multigrokstate"
+```
+
+Your archived accounts under `~/.grok/accounts/` are left alone — delete them
+manually if you want them gone.
 
 ## Local testing
 
