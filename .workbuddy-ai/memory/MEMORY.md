@@ -156,7 +156,62 @@ Node.js CLI，管理多個 Grok CLI 帳號。**對外指令名稱：`MultiGrokSt
 - `list` 的 account 欄：email 在前，名字只在「有額外資訊且塞得下」時附加。
 
 ## 測試
-- `npm test` = `node test/run.js`，**96 項**檢查，不碰真實 `~/.grok`。
+- `npm test` = `node test/run.js`，**98 項**檢查，不碰真實 `~/.grok`。
+- **測試前要先 `npm ci`**：這個 checkout 的 `node_modules` 不一定存在，
+  沒裝的話會滿江紅 `Cannot find package 'chalk'`，看起來像大規模回歸其實只是沒裝依賴。
+- **不要斷言「當下 checkout」的 git 狀態**（2026-10-12 修過）：`install.sh` 刻意
+  把安裝副本留在 detached，開發 clone 卻在分支上，所以任何讀 ambient 分支狀態的
+  斷言都會「開發者全過、使用者全掛」。兩種狀態都要在 sandbox 的獨立 repo 裡造出來測。
+- **不要斷言固定日曆日期**（2026-10-12 修過）：`daysUntil` 的斷言寫死 `=== 6`，
+  但 fixture 的 reset 是固定日期，時間一跨過去就變 5 → 測試自己過期。
+  改用「相對現在 +6d2h」的時戳 + 性質檢查（floor 且不超過剩餘時間）。
 - 重要：`fetchUsage(cred, { onTokenRefreshed })` 的 callback **必須傳**，否則 refresh 的新 token 不會寫回存檔。
 - Windows 上用 async `spawn` 而非 `spawnSync`（後者對同一 node binary 會 EBUSY）。
 - ESM 在 Windows 不能 `import(絕對路徑)`，要用 `pathToFileURL(...).href`。
+
+## macOS 開發 checkout
+- `/Users/feng33/Documents/MultiGrokState` 原本只是複製過來、**沒有 `.git`**；
+  已 `git init` + `git remote add origin` + `git symbolic-ref HEAD refs/heads/main`
+  + `git reset --mixed origin/main` 接回遠端歷史（這招可保留工作區檔案又接上歷史）。
+- commit 身分：`goldshoot0720 <goldshoot0720@gmail.com>`（repo-local config）。
+- 一鍵安裝腳本：`install.sh`（macOS / Linux，POSIX sh）、`install.ps1`、`install.cmd`。
+
+## ⚠️ raw.githubusercontent.com 的負快取（新檔案）
+**新加入 repo 的檔案，用 branch 路徑抓會回 404，即使 push 完全成功。**
+實測 `install.sh` push 後 `.../main/install.sh` 回 404 約 2 分鐘才變 200；
+同時 `.../<sha>/install.sh`、`cdn.jsdelivr.net/gh/...@main/...`、
+`github.com/.../raw/main/...` **全部都是 200**。
+→ 看到 404 **先別重 push**，用下面方式確認檔案真的在：
+`git ls-tree origin/main --name-only`、`gh api repos/<repo>/contents/<file>`，
+或改用 SHA-pinned URL 驗證內容。
+**驗證「使用者會下載到的那個 URL」時要考慮這個延遲**，別急著判定失敗。
+
+## install.sh 的紅線（詳見當日 log）
+- `curl | bash` 走 stdin → 必須自我重執行成暫存檔 + `< /dev/null`（用 `MG_REEXEC` 防迴圈）。
+- `npm link` 會 chmod bin → 安裝後設 `core.fileMode false`。
+- 優先用 `npm ci`（不寫 lock），失敗才 `npm install`，最後還原 `package-lock.json`。
+- `FORCE` 只能代表「使用者明確要求」；內部重建要用別的旗標，
+  否則會誤授權刪掉外來目錄。
+
+## ⚠️ bin 名稱不可以只差大小寫（APFS / NTFS 是同一個檔）
+`package.json` 曾經同時宣告 `"MultiGrokState"` 和 `"multigrokstate"`。
+**macOS APFS 與 Windows NTFS 都不區分大小寫** → 兩者是同一個檔，
+npm 建完第一個 symlink 後對第二個報 `EEXIST`：
+
+```
+error EEXIST: file already exists, symlink
+  '../lib/node_modules/multi-grok-state/bin/gs.js'
+  -> '/Users/.../.npm-global/bin/multigrokstate'
+```
+
+結果 **`npm link` 在 macOS 每次都 exit 1**，而且是在「已經建好可用的
+symlink 之後」才失敗。install.sh 看到非 0 就以為失敗、白白降級到
+`~/.local/bin`。已改成只有 `MultiGrokState` 一個名字。
+
+**通則：`npm link` 的回傳碼不可信**，要用「指令是否真的解析得到」判斷結果。
+install.sh 現在會檢查 `$(npm prefix -g)/bin/MultiGrokState` 是否可執行，
+可執行就報成功（`_linked=2` 分支）。
+
+**同時注意**：`~/.local/bin` 的降級 symlink 因為 `ln -sf` 最後一次寫入，
+檔名會存成小寫 `multigrokstate`（同一個檔）。無害，但 `ls` 看起來會像少了
+`MultiGrokState`，不要被騙。

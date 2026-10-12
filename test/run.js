@@ -473,8 +473,12 @@ async function main() {
     // The installer leaves the checkout detached at FETCH_HEAD. `git pull` is
     // a silent no-op there, so the updater must use fetch+reset instead — and
     // localStatus must report the detached state so callers can tell.
+    //
+    // `local` is the *ambient* checkout: detached for anyone who installed via
+    // install.sh, on a branch for a developer's clone. The two states are
+    // therefore probed in isolated repos below — asserting them against the
+    // ambient checkout fails on every real installation.
     check('localStatus reports a detached flag', 'detached' in local, JSON.stringify(local));
-    check('localStatus marks a real branch as not detached', local.detached === false, JSON.stringify(local));
     check('syncToRemote is exposed for the updater', typeof ver.syncToRemote === 'function');
     check('isClean is exposed', typeof ver.isClean === 'function');
     // isClean() is a real oracle, so assert its observable contract rather than
@@ -482,24 +486,51 @@ async function main() {
     check('isClean returns a boolean', typeof (await ver.isClean()) === 'boolean');
     check('isClean rejects a non-repo path', (await ver.isClean(path.join(sandbox, 'nope'))) === false);
 
+    /** Run a git command inside `dir`, rejecting on a non-zero exit. */
+    const gitIn = (dir) => (args) =>
+      new Promise((resolve, reject) => {
+        const c = spawn('git', args, { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] });
+        let o = '', e = '';
+        c.stdout.on('data', (d) => (o += d));
+        c.stderr.on('data', (d) => (e += d));
+        c.on('error', reject);
+        c.on('close', (code) => (code === 0 ? resolve(o) : reject(new Error(e || `exit ${code}`))));
+      });
+    const PROBE_ID = ['-c', 'user.email=probe@example.com', '-c', 'user.name=probe'];
+
+    // A checkout on a real branch must NOT be reported as detached. Built
+    // offline so the assertion never depends on the ambient repo.
+    const branchDir = path.join(sandbox, 'branch-probe');
+    {
+      const g = gitIn(branchDir);
+      fs.mkdirSync(branchDir, { recursive: true });
+      try {
+        await g(['init', '-q', '.']);
+        await g(['symbolic-ref', 'HEAD', 'refs/heads/main']);
+        await g([...PROBE_ID, 'commit', '-q', '--allow-empty', '-m', 'probe']);
+        const br = await ver.localStatus(branchDir);
+        check('a real branch is not flagged detached', br.detached === false, JSON.stringify(br));
+        check('a real branch reports its name', br.branch === 'main', JSON.stringify(br));
+        check('a real branch still resolves a SHA',
+              typeof br.sha === 'string' && /^[0-9a-f]{40}$/.test(br.sha), JSON.stringify(br));
+      } catch (err) {
+        check('branch checkout probe ran', false, err.message);
+      }
+      fs.rmSync(branchDir, { recursive: true, force: true });
+    }
+
     // A detached HEAD must be detected as detached, not mislabelled as a branch.
+    // Reproduced locally (commit, then detach) so the probe needs neither the
+    // network nor the ambient SHA — an installer's FETCH_HEAD checkout presents
+    // the same state to git: `rev-parse --abbrev-ref HEAD` is literally "HEAD".
     const detDir = path.join(sandbox, 'detached-probe');
     {
-      const g = (args) =>
-        new Promise((resolve, reject) => {
-          const c = spawn('git', args, { cwd: detDir, stdio: ['ignore', 'pipe', 'pipe'] });
-          let o = '', e = '';
-          c.stdout.on('data', (d) => (o += d));
-          c.stderr.on('data', (d) => (e += d));
-          c.on('error', reject);
-          c.on('close', (code) => (code === 0 ? resolve(o) : reject(new Error(e || `exit ${code}`))));
-        });
+      const g = gitIn(detDir);
       fs.mkdirSync(detDir, { recursive: true });
       try {
         await g(['init', '-q', '.']);
-        await g(['remote', 'add', 'origin', `https://github.com/${ver.REPO}.git`]);
-        await g(['fetch', '-q', '--depth', '1', 'origin', local.sha]);
-        await g(['checkout', '-q', 'FETCH_HEAD']);
+        await g([...PROBE_ID, 'commit', '-q', '--allow-empty', '-m', 'probe']);
+        await g(['checkout', '-q', '--detach', 'HEAD']);
         const det = await ver.localStatus(detDir);
         check('detached checkout is flagged detached', det.detached === true, JSON.stringify(det));
         check('detached checkout has no branch name', det.branch === null, JSON.stringify(det));
