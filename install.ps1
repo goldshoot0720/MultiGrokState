@@ -117,12 +117,22 @@ if (-not (Test-Path (Join-Path $InstallDir "package.json"))) {
     if (Test-Path $InstallDir) { Remove-Item -Recurse -Force $InstallDir }
     New-Item -ItemType Directory -Force -Path (Split-Path $InstallDir -Parent) | Out-Null
 
+    # git writes progress to stderr; with $ErrorActionPreference = 'Stop' that
+    # would abort the script even on success. Run it with 'Continue' and judge
+    # the result by the exit code instead.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     try {
         git clone --depth 1 --branch $Branch "https://github.com/$Repo.git" $InstallDir 2>&1 | Out-Null
+        $cloneExit = $LASTEXITCODE
     }
-    catch {
-        Write-Host "  Failed to clone https://github.com/$Repo.git" -ForegroundColor Red
-        Write-Host "  Check the repository name and your network connection." -ForegroundColor Gray
+    finally {
+        $ErrorActionPreference = $prevEap
+    }
+
+    if ($cloneExit -ne 0 -or -not (Test-Path (Join-Path $InstallDir "package.json"))) {
+        Write-Host "  Failed to clone https://github.com/$Repo.git (exit code $cloneExit)" -ForegroundColor Red
+        Write-Host "  Check the repository name, the branch '$Branch', and your network connection." -ForegroundColor Gray
         exit 1
     }
     Write-Ok "source downloaded"
