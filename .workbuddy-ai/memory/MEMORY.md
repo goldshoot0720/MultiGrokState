@@ -38,6 +38,16 @@ Node.js CLI，管理多個 Grok CLI 帳號。**對外指令名稱：`MultiGrokSt
   `Date.parse` 可吃。顯示本地時區，與 Grok CLI 面板一致（`October 18, 21:37`）。
   時間工具都在 `src/usage.js`：`parseTimestamp` / `formatResetTime` / `formatCountdown` / `daysUntil`。
   `daysUntil` 用 **floor**（ceil 會讓 `6d 2h` 顯示成 7d，跟倒數自相矛盾）。
+- **SuperGrok 週視窗常常完全不回 usage 欄位**（無 `creditUsagePercent` / `productUsage` / limit）。
+  Grok CLI 面板顯示成 `0%`，我們也照做（`noCapReported` 旗標 + 附註說明 bar 是佔位）。
+  **不要印 `—`**，使用者會以為壞掉。
+
+## ⚠️ 使用者實際執行的是 `~/.multigrokstate`
+- PATH 上的 `MultiGrokState` 是 **npm link 到 `C:\Users\chbon\.multigrokstate`**，
+  不是開發目錄 `D:\CODE\MultiGrokState`。
+- **改完程式務必同步那份 checkout**，否則使用者跑到的還是舊版：
+  `cd ~/.multigrokstate && git fetch --depth 1 origin main && git checkout FETCH_HEAD`。
+- 那份會有 **CRLF/LF 假 modified**（`bin/gs.js` 等），`git checkout -- <file>` 清掉即可。
 
 ## 約定
 - 存檔路徑：`~/.grok/accounts/<name>_auth.json`。
@@ -61,7 +71,7 @@ Node.js CLI，管理多個 Grok CLI 帳號。**對外指令名稱：`MultiGrokSt
 - `src/commands.js` — login / logout / switch（logout 含 `resolveLiveIdentity()`）
 - `src/cli.js` — chalk 輸出與指令分派（含 `resetLine`、`cmdUpdate`）
 - `src/version.js` — 更新檢查（local HEAD vs remote SHA、git fallback、TTL 快取）
-- `test/run.js` — 離線測試 harness（mock API + 暫存 GROK_HOME），`npm test`（74 項）
+- `test/run.js` — 離線測試 harness（mock API + 暫存 GROK_HOME），`npm test`（76 項）
 - `install.cmd` / `install.ps1` — 一鍵安裝（CRLF、純 ASCII、SHA-based fetch）
 - `.gitattributes` — `*.cmd -text`（見上方紅線，勿改回 `eol=crlf`）
 
@@ -94,7 +104,7 @@ Node.js CLI，管理多個 Grok CLI 帳號。**對外指令名稱：`MultiGrokSt
 - `list` 的 account 欄：email 在前，名字只在「有額外資訊且塞得下」時附加。
 
 ## 測試
-- `npm test` = `node test/run.js`，**74 項**檢查，不碰真實 `~/.grok`。
+- `npm test` = `node test/run.js`，**76 項**檢查，不碰真實 `~/.grok`。
 - 重要：`fetchUsage(cred, { onTokenRefreshed })` 的 callback **必須傳**，否則 refresh 的新 token 不會寫回存檔。
 - Windows 上用 async `spawn` 而非 `spawnSync`（後者對同一 node binary 會 EBUSY）。
 - ESM 在 Windows 不能 `import(絕對路徑)`，要用 `pathToFileURL(...).href`。
