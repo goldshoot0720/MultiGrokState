@@ -3,6 +3,13 @@
 Node.js CLI，管理多個 Grok CLI 帳號。**對外指令名稱：`MultiGrokState`**（已 npm link 全域註冊）。
 入口腳本檔名是 `bin/gs.js`（歷史遺留，內部路徑不對外，改指令名不用改它）。
 
+## 發佈資訊
+- GitHub repo：**`goldshoot0720/MultiGrokState`**（PUBLIC，main 分支）。
+- 使用者 GitHub 帳號：`goldshoot0720`（`gh auth status` 已登入；另有 huang1988pioneer）。
+- 一鍵安裝（`install.ps1` / `install.cmd`）的預設 `Repo` 必須是上面這個，不要寫錯。
+- 上線後用 `curl -s -o /dev/null -w "%{http_code}" <raw-url>` 驗證回 200。
+- 本機 git remote 已設好，push 用 `gh auth setup-git` 取得憑證（`GIT_TERMINAL_PROMPT=0` 避免卡住）。
+
 ## 核心事實（不要重新摸索）
 - `~/.grok/auth.json` 是 **map**：key = `https://auth.x.ai::<client_id>`，
   value = `{ key, refresh_token, email, user_id, expires_at, oidc_client_id, oidc_issuer, ... }`。
