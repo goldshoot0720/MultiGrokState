@@ -1,217 +1,104 @@
 # 專案：MultiGrokState
 
-Node.js CLI，管理多個 Grok CLI 帳號。**對外指令名稱：`MultiGrokState`**（已 npm link 全域註冊）。
-入口腳本是 **`bin/multigrokstate.js`**（薄殼：shebang → `runCli()` → 延遲 60ms `flushUpdateNotice()`）。
-（2026-10-12 由 `bin/gs.js` 改名而來，純粹讓檔名與指令名一致。）
+Node.js CLI，管理多個 Grok CLI 帳號。對外指令名 **`MultiGrokState`**（npm link 全域註冊）。
+入口 **`bin/multigrokstate.js`**（薄殼：shebang → `runCli()` → 延遲 60ms `flushUpdateNotice()`）。
+（2026-10-12 由 `bin/gs.js` 改名，讓檔名與指令名一致。）
 
-## 發佈資訊
-- GitHub repo：**`goldshoot0720/MultiGrokState`**（PUBLIC，main 分支）。
-- 使用者 GitHub 帳號：`goldshoot0720`（`gh auth status` 已登入；另有 huang1988pioneer）。
-- 一鍵安裝（`install.ps1` / `install.cmd`）的預設 `Repo` 必須是上面這個，不要寫錯。
-- 上線後用 `curl -s -o /dev/null -w "%{http_code}" <raw-url>` 驗證回 200。
-- 本機 git remote 已設好，push 用 `gh auth setup-git` 取得憑證（`GIT_TERMINAL_PROMPT=0` 避免卡住）。
+## 檔案地圖
+- `bin/multigrokstate.js` — CLI 入口（薄殼）
+- `src/accounts.js` — auth.json 解析、存檔讀寫、JWT decode、`updateAccountCredential`
+- `src/usage.js` — billing 端點、token refresh、payload 正規化、時間格式化
+- `src/commands.js` — login / logout / switch（含 `resolveLiveIdentity()`）
+- `src/cli.js` — chalk 輸出與指令分派（`cmdUpdate`、`--json` 輸出）
+- `src/version.js` — 更新檢查（HEAD vs remote SHA、TTL 快取）
+- `test/run.js` — 離線測試 harness（mock API + 暫存 GROK_HOME）
+- `install.cmd` / `install.ps1` / `install.sh` — 一鍵安裝
+- `gui/MultiGrokStateGui/` — Avalonia 桌面 GUI；`gui/run.cmd` 一鍵建置啟動
+- `.gitattributes` — `*.cmd -text`（勿改回 `eol=crlf`）
 
-## Windows 安裝腳本紅線（踩過兩次坑）
-- `.cmd` / `.bat` **必須 CRLF**：bare LF 會讓 cmd.exe 解析爆掉 → 無限亂碼迴圈。
-- **不要用 `.gitattributes` 的 `text eol=crlf`**：那會讓 git 在 object 裡存 LF、只在 checkout 時展開，
-  而 GitHub raw 端點直接吐 blob → 使用者下載到的還是 LF。
-  要寫 **`*.cmd -text`**，並 `git add --renormalize`，確認 `git ls-files --eol` 是 `i/crlf w/crlf`。
-- **raw 端點有 CDN 快取**（branch 名）→ installer 應先用 GitHub API 把 branch 解析成 commit SHA，
-  再 `git fetch --depth 1 <sha>`；SHA 不可變最穩。
-- 驗證要驗「使用者真的會下載到的那個 URL」，不是只驗本地檔案。
-- `install.cmd` 保持純 ASCII（em-dash 在 OEM 主控台會變 `??`）。
+## 發佈與安裝
+- GitHub repo：**`goldshoot0720/MultiGrokState`**（PUBLIC，main）。使用者帳號 `goldshoot0720`（`gh auth` 已登入）。
+- 一鍵安裝預設 `Repo` 必須是上面這個。上線後用 raw URL 驗證回 200。
+- push 用 `gh auth setup-git`；`GIT_TERMINAL_PROMPT=0` 避免卡住。
 
-## 核心事實（不要重新摸索）
+## 核心 API 事實
 - `~/.grok/auth.json` 是 **map**：key = `https://auth.x.ai::<client_id>`，
-  value = `{ key, refresh_token, email, user_id, expires_at, oidc_client_id, oidc_issuer, ... }`。
-  Grok CLI 會 hot-reload 此檔 → 換檔即換帳號，無需重啟。
+  value = `{ key, refresh_token, email, user_id, expires_at, oidc_client_id, oidc_issuer }`。
+  Grok CLI hot-reload 此檔 → 換檔即換帳號，無需重啟。
 - OAuth client_id `b1a00492-073a-47ea-816f-4c329264a828`。
 - 額度 API：`GET https://cli-chat-proxy.grok.com/v1/billing?format=credits`（週）、
   `GET .../v1/billing`（月）。Header 需 `Authorization: Bearer`、`x-grok-client-mode: cli`。
-- **token 幾乎總是過期 → 先 401**，必須 `POST https://auth.x.ai/oauth2/token`
-  （`grant_type=refresh_token`）換新 token 再重打。auth.json 的 token 過期不代表帳號失效，
-  因為有 refresh_token 可續。
-- 週報表：`config.creditUsagePercent`（無上限方案不存在此欄位）、`currentPeriod`、`productUsage[]`。
-  月報表：`config.{monthlyLimit,used,history}`，格式不同。
-  金額欄位包成 `{ val: n }`。
-- **reset 時間**：週用 `config.currentPeriod.end`、月用 `config.billingPeriodEnd`。
-  格式是 RFC 3339 + numeric offset + 微秒（`…T13:37:26.239595+00:00`），
-  `Date.parse` 可吃。顯示本地時區，與 Grok CLI 面板一致（`October 18, 21:37`）。
-  時間工具都在 `src/usage.js`：`parseTimestamp` / `formatResetTime` / `formatCountdown` / `daysUntil`。
-  `daysUntil` 用 **floor**（ceil 會讓 `6d 2h` 顯示成 7d，跟倒數自相矛盾）。
-- **SuperGrok 週視窗常常完全不回 usage 欄位**（無 `creditUsagePercent` / `productUsage` / limit）。
-  Grok CLI 面板顯示成 `0%`，我們也照做（`noCapReported` 旗標 + 附註說明 bar 是佔位）。
-  **不要印 `—`**，使用者會以為壞掉。
+- token 幾乎總是過期 → 先 401 → 必須 `POST https://auth.x.ai/oauth2/token`（`grant_type=refresh_token`）換新再重打。
+- 週報表：`config.creditUsagePercent`（無上限方案無此欄）、`currentPeriod`、`productUsage[]`。
+  月報表：`config.{monthlyLimit,used,history}`。金額欄位包成 `{ val: n }`。
+- reset 時間：週用 `config.currentPeriod.end`、月用 `config.billingPeriodEnd`。
+  格式 RFC 3339 + offset + 微秒（`…T13:37:26.239595+00:00`），`Date.parse` 可吃。顯示本地時區。
+- SuperGrok 週視窗常完全不回 usage 欄位 → 顯示 `0%`（`noCapReported` 旗標 + 附註），**不要印 `—`**。
+- 時間工具在 `src/usage.js`：`parseTimestamp` / `formatResetTime` / `formatCountdown` / `daysUntil`（用 floor）。
 
-## ⚠️ 使用者實際執行的是 `~/.multigrokstate`
-- PATH 上的 `MultiGrokState` 是 **npm link 到 `C:\Users\chbon\.multigrokstate`**，
-  不是開發目錄 `D:\CODE\MultiGrokState`。
-- **改完程式務必同步那份 checkout**，否則使用者跑到的還是舊版：
-  `cd ~/.multigrokstate && git fetch --depth 1 origin main && git checkout FETCH_HEAD`。
-- 那份會有 **CRLF/LF 假 modified**（`bin/gs.js` 等），`git checkout -- <file>` 清掉即可。
-
-## 約定
-- 存檔路徑：`~/.grok/accounts/<name>_auth.json`。
-- 寫檔一律原子寫入 + `0600`。
-- 帳號名稱需 sanitize（禁 `/\`、空白轉 `_`），避免路徑逃逸。
+## 帳號模型與指令語意（勿改）
+- 存檔路徑 `~/.grok/accounts/<name>_auth.json`；原子寫入 + `0600`；name 需 sanitize（禁 `/\`、空白→`_`）。
 - 只用官方端點：`auth.x.ai`、`cli-chat-proxy.grok.com`。
+- `login [name]` → 跑 `grok login` 產生 auth.json → 複製成 `accounts/<name>_auth.json`（live 檔保留）。
+- `logout` → 先複製 auth.json 成 `accounts/<email>_auth.json`（email local part）→ 再刪 auth.json 與 .lock。
+  - 顯式 name 可覆蓋；既有存檔不覆蓋（要 `-f`）。
+  - 存檔名取 **access token 最新（expiresAt 最大）** 那筆（`resolveLiveIdentity()`），非 `primaryCredential().email`。
+- 識別顯示**一律用 email**；`displayName()` 處理 first===last 的重複。
+  欄位對齊用 `displayWidth()`（CJK 算 2 格、ANSI 算 0 格）。
 
-## login / logout 語意（使用者明確定義，勿改）
-- `login [name]` → 跑 `grok login` 產生 `auth.json` → 複製成 `accounts/<name>_auth.json`（live 檔保留）。
-- `logout` → **先複製** `auth.json` 成 `accounts/<email>_auth.json`（取 email local part，
-  例 `goldshoot0720@gmail.com` → `goldshoot0720_auth.json`）**→ 再刪 `auth.json` 與 `auth.json.lock`**。
-  - 顯式 name 可覆蓋檔名：`logout <name>`。
-  - **既有存檔不覆蓋**（磁碟上可能有更新 rotate 過的 token），要 `-f` / `--force` 才強制。
-  - auth.json 是 map 且 `switch` 會殘留舊 identity → 存檔名要取
-    **access token 最新（expiresAt 最大）** 那筆（`resolveLiveIdentity()`），
-    不是簡單的 `primaryCredential().email`。
+## GUI（Avalonia）
+- Avalonia 12 + CommunityToolkit.Mvvm，net8.0，`dotnet build -c Release`。啟動 `gui/run.cmd`。
+- GUI 完全不碰 auth/quota 邏輯，shell out CLI 解析 JSON：`list --json`、`usage --json`、`where --json`。
+- `--json` 時必須關背景更新提示（`wantsNotice` 含 `&& !argv.includes('--json')`），否則 JSON.parse 爆。
+- CLI 解析順序（`Services/CliService.cs`）：`MULTIGROKSTATE_CLI` env → 同 repo `bin/multigrokstate.js` → 全域 `MultiGrokState`。
+- 互動指令開可見終端機 `cmd.exe /c node … & pause`，關窗觸發 `InteractiveCommandCompleted` → refresh。
+- **⚠️ .NET 讀子行程 stdout 預設用系統 ANSI 碼頁（CP950）解碼 → UTF-8 CJK 吃掉 JSON 引號。
+  必須設 `psi.StandardOutputEncoding = Encoding.UTF8`（+ StandardErrorEncoding）。**
+- Avalonia csproj 沒開 `ImplicitUsings` → 要自己加。
+- 截圖驗證：用系統 Python 3.14 Pillow；`SetForegroundWindow` 對背景行程無效 →
+  用 `PrintWindow(hwnd,hdc,2)` + `GetDIBits`（後者要設 argtypes）。
+- 背景啟動的行程在該輪對話結束會被殺 → 「啟動→sleep→截圖→kill」同一指令完成。截圖含真實 email → **不可進 public repo**。
 
-## 檔案
-- `bin/multigrokstate.js` — CLI 執行入口（薄殼；改指令名時**要**同步改這裡的 `package.json` bin）
-- `src/accounts.js` — auth.json 解析、存檔讀寫、JWT decode、`updateAccountCredential`（refresh 後寫回）
-- `src/usage.js` — billing 端點、token refresh、payload 正規化、reset 時間格式化
-- `src/commands.js` — login / logout / switch（logout 含 `resolveLiveIdentity()`）
-- `src/cli.js` — chalk 輸出與指令分派（含 `resetLine`、`cmdUpdate`、`--json` 輸出）
-- `src/version.js` — 更新檢查（local HEAD vs remote SHA、git fallback、TTL 快取）
-- `test/run.js` — 離線測試 harness（mock API + 暫存 GROK_HOME），`npm test`（96 項）
-- `install.cmd` / `install.ps1` — 一鍵安裝（CRLF、純 ASCII、SHA-based fetch）
-- `.gitattributes` — `*.cmd -text`（見上方紅線，勿改回 `eol=crlf`）
-- `gui/MultiGrokStateGui/` — Avalonia 桌面 GUI（見下方 GUI 段）
-- `gui/run.cmd` — 一鍵建置 + 啟動 GUI（CRLF）
+## 更新機制
+- 邏輯在 `src/version.js`；`update` / `update --check` 在 `src/cli.js` 的 `cmdUpdate()`。
+- 比對 **commit SHA**（local `git rev-parse HEAD` vs remote branch tip）。
+- **⚠️ GitHub REST API 會 rate limit（未認證 60/h，共享 IP 常 403），`git ls-remote` 不會
+  → `remoteSha()` 必須「API 優先 + git fallback」。**
+- **⚠️ 絕不用 `git pull`**：安裝副本永遠 detached HEAD，`git pull` 會靜默 no-op。
+  正確 = `syncToRemote()`：`remoteSha()` → `git fetch --depth 1 origin <sha>` → `git reset --hard FETCH_HEAD`，先 `isClean()` 守門。
+- 背景檢查 6h TTL 快取 `$GROK_HOME/.multigrokstate-update.json`；`GROK_NO_UPDATE_CHECK=1` 關閉。
+- 提示靠 `globalThis.__gsUpdateNotice` + `flushUpdateNotice()`，`bin/multigrokstate.js` 結束後延遲 60ms 印。
 
-### 改 `bin/` 入口檔名時要同步的 5 個地方
-`package.json`（bin ×2 + scripts）、`test/run.js`、`gui/…/Services/CliService.cs`、
-`install.cmd`、`install.ps1`。install 腳本是 CRLF，**用位元組層級替換**（別用會動行尾的工具）。
-`package-lock.json` 的 `bin` 區塊會過時 → `npm install --package-lock-only` 重生。
-
-## GUI（Avalonia，`gui/MultiGrokStateGui/`）
-- Avalonia 12 + CommunityToolkit.Mvvm，**net8.0**，`dotnet build -c Release`。
-- 啟動：`gui/run.cmd`（首次會先 build）。
-- **GUI 完全不碰 auth/quota 邏輯**，一律 shell out 給 CLI 並解析 JSON。
-- CLI 的機器可讀輸出（`src/cli.js`）：
-  `list --json`、`usage --json`、`where --json`。
-- **⚠️ `--json` 時必須關掉背景更新提示**：`runCli()` 的 `wantsNotice` 要含
-  `&& !argv.includes('--json')`。否則 `↑ update available` 會接在 JSON 後面 →
-  `JSON.parse` 爆掉。（已修，第 2b 節測試守住。）
-- CLI 解析順序（`Services/CliService.cs`）：`MULTIGROKSTATE_CLI` env →
-  **同 repo `bin/multigrokstate.js`**（找不到才退回舊名 `bin/gs.js`）→ 全域 `MultiGrokState`。
-  偏好 repo 版以保證支援 `--json`。
-- 互動指令（login/logout）開可見終端機：`cmd.exe /c node <gs.js> … & pause`，
-  關窗觸發 `InteractiveCommandCompleted` → 自動 refresh。
-- **⚠️ 最關鍵的坑：.NET 讀子行程 stdout 預設用系統 ANSI 碼頁解碼**（本機 CP950）。
-  UTF-8 的 CJK 位元組被錯併 → 吃掉 JSON 引號 → 報
-  `'0x0A' is invalid within a JSON string … $[0].displayName`。
-  **必須設 `psi.StandardOutputEncoding = Encoding.UTF8`（+ StandardErrorEncoding）。**
-  任何讀子行程文字輸出的 .NET 程式都要這樣做。
-- Avalonia 模板 csproj **沒開 `ImplicitUsings`** → 要自己加，否則 `Task`/`List<>` 找不到。
-- 截圖驗證 GUI：PowerShell `Add-Type` / `Reflection.Assembly.Load` 都被安全策略封鎖；
-  用**系統 Python 3.14 的 Pillow**。`SetForegroundWindow` 對背景行程無效（會截到前景視窗），
-  要用 **`PrintWindow(hwnd, hdc, 2)` + `GetDIBits`**（後者必須設 `argtypes`，否則 64-bit 指標 OverflowError）。
-- GUI 以 `&` 背景啟動的行程**在該輪對話結束時會被殺** → 驗證要「啟動→sleep→截圖→kill」同一指令完成。
-- 截圖含真實 email → **不可進 public repo**。
-
-## 更新檢查（update / 背景提示）
-- 邏輯在 **`src/version.js`**；`update` / `update --check` 在 `src/cli.js` 的 `cmdUpdate()`。
-- 比對的是 **commit SHA**（local `git rev-parse HEAD` vs remote branch tip），不是版本字串。
-- **⚠️ GitHub REST API 會 rate limit（未認證 60 req/h per IP，共享 IP 常態 403），
-  `git ls-remote` 不會。** 所以 `remoteSha()` 必須「API 優先 + git fallback」，
-  絕對不能只靠 API，否則使用者端會常態性「檢查失敗」。
-- **⚠️ 絕對不要用 `git pull` 做更新**：installer 用 `git fetch --depth 1 <sha>` +
-  `checkout FETCH_HEAD`，安裝副本永遠是 **detached HEAD**，而 `git pull` 在 detached HEAD
-  會印 "Already up to date." 然後**什麼都不做**（靜默 no-op）。
-  正確做法 = `syncToRemote()`：`remoteSha()` 取 SHA → `git fetch --depth 1 origin <sha>`
-  → `git reset --hard FETCH_HEAD`。前面先用 `isClean()` 守門避免蓋掉本機變更。
-- 背景檢查有 6h TTL 快取：`$GROK_HOME/.multigrokstate-update.json`。
-- `GROK_NO_UPDATE_CHECK=1` 可完全關閉背景檢查。
-- 背景提示靠 `globalThis.__gsUpdateNotice` + `flushUpdateNotice()`，
-  由 `bin/gs.js` 在指令結束後延遲 60ms 印出（避免阻塞）。
-
-## 安裝副本 vs 工作目錄（兩份不同 clone）
-- 全域指令 `MultiGrokState` = npm link → **`~/.multigrokstate`**（獨立 clone）。
-- 開發工作目錄 = **`D:/CODE/MultiGrokState`**。
-- **改工作目錄不會自動反映到全域指令**，要 `MultiGrokState update` 或重跑 installer。
-- ⚠️ 此 repo 疑似有**並行 session** 在同時 commit/push。commit 前先 `git fetch`，
-  確認 `git merge-base --is-ancestor origin/main HEAD` 再 push。
-
-## 環境坑（Windows / 本機）
-- `spawn(cmd, args, { cwd })` 的 `cwd` **不可用 Git-Bash POSIX 路徑**（`/tmp/...`）→ 會 ENOENT。
-  要用真 Windows 路徑（`C:/...`）。
-- `spawnSync` / `execFileSync` 對 git 會 EBUSY → 一律用 async `spawn`。
-
-## 測試 harness 紅線
-- **絕對不要改寫 production source 檔**（如 `src/usage.js` 的 URL 常數）。
-  曾經因此把 `127.0.0.1:3690` 留在 source 裡（中斷沒還原）→ 之後所有測試 401 全掛，
-  看起來像功能壞掉其實是測試汙染。
-- 正確做法：`src/usage.js` 的端點讀 `process.env.GROK_BILLING_URL` / `GROK_TOKEN_URL`，
-  harness 用 env var（`MOCK_ENDPOINTS`）注入，source 永不修改。
-- `test/run.js` 第 15 節就是防這個回歸的。
-
-## 帳號識別顯示（list / usage）
-- **一律以 email 識別帳號**，不用 profile name — 同一人的多個 archive
-  name 可能完全一樣，email 才有區分度。
-- **xAI 常把同一字串同時放進 `first_name` 和 `last_name`**（實例：兩者都是 `鋒兄`），
-  舊的 `.join(' ')` 會產生 `鋒兄 鋒兄`。`displayName()` 已改成 first===last 時只留一份。
-- 欄位對齊要用 `displayWidth()`：**CJK 算 2 格**、ANSI escape 算 0 格。
-  用 `String.length` 會讓 `鋒兄` 之後的欄位全部歪掉。
-- `list` 的 account 欄：email 在前，名字只在「有額外資訊且塞得下」時附加。
+## 兩份 clone（安裝副本 vs 工作目錄）
+- 全域指令 = npm link → **`~/.multigrokstate`**；開發 = **`D:/CODE/MultiGrokState`**。
+- 改工作目錄**不會**自動反映全域指令 → `MultiGrokState update` 或重跑 installer。
+- ⚠️ repo 疑似有**並行 session** 同時 commit/push。commit 前先 `git fetch`，確認 `git merge-base --is-ancestor origin/main HEAD` 再 push。
 
 ## 測試
-- `npm test` = `node test/run.js`，**98 項**檢查，不碰真實 `~/.grok`。
-- **測試前要先 `npm ci`**：這個 checkout 的 `node_modules` 不一定存在，
-  沒裝的話會滿江紅 `Cannot find package 'chalk'`，看起來像大規模回歸其實只是沒裝依賴。
-- **不要斷言「當下 checkout」的 git 狀態**（2026-10-12 修過）：`install.sh` 刻意
-  把安裝副本留在 detached，開發 clone 卻在分支上，所以任何讀 ambient 分支狀態的
-  斷言都會「開發者全過、使用者全掛」。兩種狀態都要在 sandbox 的獨立 repo 裡造出來測。
-- **不要斷言固定日曆日期**（2026-10-12 修過）：`daysUntil` 的斷言寫死 `=== 6`，
-  但 fixture 的 reset 是固定日期，時間一跨過去就變 5 → 測試自己過期。
-  改用「相對現在 +6d2h」的時戳 + 性質檢查（floor 且不超過剩餘時間）。
-- 重要：`fetchUsage(cred, { onTokenRefreshed })` 的 callback **必須傳**，否則 refresh 的新 token 不會寫回存檔。
-- Windows 上用 async `spawn` 而非 `spawnSync`（後者對同一 node binary 會 EBUSY）。
-- ESM 在 Windows 不能 `import(絕對路徑)`，要用 `pathToFileURL(...).href`。
+- `npm test` = `node test/run.js`，98 項，不碰真實 `~/.grok`。**測試前先 `npm ci`**（否則 `Cannot find package 'chalk'`）。
+- **不要斷言當下 checkout 的 git 狀態**（install.sh 留 detached、開發在分支）→ 兩種狀態都要在 sandbox 造出來測。
+- **不要斷言固定日曆日期**（時間一過就過期）→ 用相對時戳 + 性質檢查。
+- `fetchUsage(cred, { onTokenRefreshed })` 的 callback **必須傳**。
+- Windows 用 async `spawn`（`spawnSync` 對同 node binary EBUSY）。ESM 不能 `import(絕對路徑)`，用 `pathToFileURL().href`。
+- 測試 harness 紅線：**絕不改寫 production source**（曾把 mock URL 留在 source → 全測試 401）。
+  端點讀 `process.env.GROK_BILLING_URL` / `GROK_TOKEN_URL`，harness 用 env 注入。`test/run.js` 第 15 節防此回歸。
+
+## 紅線 / 環境坑
+- **Windows 安裝腳本**：`.cmd` / `.bat` 必須 **CRLF**（LF → cmd.exe 亂碼迴圈）。
+  `.gitattributes` 用 **`*.cmd -text`**（勿用 `eol=crlf`，raw 端點會吐 LF），`git add --renormalize`，
+  `git ls-files --eol` 要 `i/crlf w/crlf`。installer 先解析 branch→SHA 再 `git fetch --depth 1 <sha>`（raw 端點有 CDN 快取）。`install.cmd` 純 ASCII。
+- **raw.githubusercontent.com 負快取**：新檔案用 branch 路徑可能 404 約 2 分鐘（SHA 路徑 / jsDelivr 已 200）。
+  看到 404 別急著重 push，用 `git ls-tree origin/main` 或 `gh api …/contents/<file>` 確認。
+- **install.sh**：`curl | bash` 走 stdin → 自我重執行成暫存檔 + `< /dev/null`（`MG_REEXEC` 防迴圈）；
+  `npm link` 會 chmod bin → 設 `core.fileMode false`；優先 `npm ci` 失敗才 `npm install`；`FORCE` 只代表使用者明確要求。
+- **bin 名不可只差大小寫**（APFS / NTFS 不區分）→ 只留 `MultiGrokState`。
+  **`npm link` 回傳碼不可信**，用「指令是否解析得到」判斷（install.sh 檢查 `$(npm prefix -g)/bin/MultiGrokState` 可執行）。
+- `spawn(cmd,args,{cwd})` 的 cwd 不可用 Git-Bash POSIX 路徑（`/tmp/…`）→ 用 `C:/…`。
+- 改 `bin/` 入口檔名要同步 5 處：`package.json`（bin×2 + scripts）、`test/run.js`、`gui/…/Services/CliService.cs`、
+  `install.cmd`、`install.ps1`（install 用位元組層級替換）；`package-lock.json` bin 區塊用 `npm install --package-lock-only` 重生。
 
 ## macOS 開發 checkout
-- `/Users/feng33/Documents/MultiGrokState` 原本只是複製過來、**沒有 `.git`**；
-  已 `git init` + `git remote add origin` + `git symbolic-ref HEAD refs/heads/main`
-  + `git reset --mixed origin/main` 接回遠端歷史（這招可保留工作區檔案又接上歷史）。
-- commit 身分：`goldshoot0720 <goldshoot0720@gmail.com>`（repo-local config）。
-- 一鍵安裝腳本：`install.sh`（macOS / Linux，POSIX sh）、`install.ps1`、`install.cmd`。
-
-## ⚠️ raw.githubusercontent.com 的負快取（新檔案）
-**新加入 repo 的檔案，用 branch 路徑抓會回 404，即使 push 完全成功。**
-實測 `install.sh` push 後 `.../main/install.sh` 回 404 約 2 分鐘才變 200；
-同時 `.../<sha>/install.sh`、`cdn.jsdelivr.net/gh/...@main/...`、
-`github.com/.../raw/main/...` **全部都是 200**。
-→ 看到 404 **先別重 push**，用下面方式確認檔案真的在：
-`git ls-tree origin/main --name-only`、`gh api repos/<repo>/contents/<file>`，
-或改用 SHA-pinned URL 驗證內容。
-**驗證「使用者會下載到的那個 URL」時要考慮這個延遲**，別急著判定失敗。
-
-## install.sh 的紅線（詳見當日 log）
-- `curl | bash` 走 stdin → 必須自我重執行成暫存檔 + `< /dev/null`（用 `MG_REEXEC` 防迴圈）。
-- `npm link` 會 chmod bin → 安裝後設 `core.fileMode false`。
-- 優先用 `npm ci`（不寫 lock），失敗才 `npm install`，最後還原 `package-lock.json`。
-- `FORCE` 只能代表「使用者明確要求」；內部重建要用別的旗標，
-  否則會誤授權刪掉外來目錄。
-
-## ⚠️ bin 名稱不可以只差大小寫（APFS / NTFS 是同一個檔）
-`package.json` 曾經同時宣告 `"MultiGrokState"` 和 `"multigrokstate"`。
-**macOS APFS 與 Windows NTFS 都不區分大小寫** → 兩者是同一個檔，
-npm 建完第一個 symlink 後對第二個報 `EEXIST`：
-
-```
-error EEXIST: file already exists, symlink
-  '../lib/node_modules/multi-grok-state/bin/gs.js'
-  -> '/Users/.../.npm-global/bin/multigrokstate'
-```
-
-結果 **`npm link` 在 macOS 每次都 exit 1**，而且是在「已經建好可用的
-symlink 之後」才失敗。install.sh 看到非 0 就以為失敗、白白降級到
-`~/.local/bin`。已改成只有 `MultiGrokState` 一個名字。
-
-**通則：`npm link` 的回傳碼不可信**，要用「指令是否真的解析得到」判斷結果。
-install.sh 現在會檢查 `$(npm prefix -g)/bin/MultiGrokState` 是否可執行，
-可執行就報成功（`_linked=2` 分支）。
-
-**同時注意**：`~/.local/bin` 的降級 symlink 因為 `ln -sf` 最後一次寫入，
-檔名會存成小寫 `multigrokstate`（同一個檔）。無害，但 `ls` 看起來會像少了
-`MultiGrokState`，不要被騙。
+- `/Users/feng33/Documents/MultiGrokState`：`git init` + `remote add origin` + `symbolic-ref HEAD refs/heads/main`
+  + `git reset --mixed origin/main` 接回歷史（保留工作區檔案）。
+- commit 身分 `goldshoot0720 <goldshoot0720@gmail.com>`（repo-local）。
+- 安裝腳本：`install.sh`（POSIX sh）、`install.ps1`、`install.cmd`。
