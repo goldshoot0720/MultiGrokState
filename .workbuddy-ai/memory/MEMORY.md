@@ -10,6 +10,16 @@ Node.js CLI，管理多個 Grok CLI 帳號。**對外指令名稱：`MultiGrokSt
 - 上線後用 `curl -s -o /dev/null -w "%{http_code}" <raw-url>` 驗證回 200。
 - 本機 git remote 已設好，push 用 `gh auth setup-git` 取得憑證（`GIT_TERMINAL_PROMPT=0` 避免卡住）。
 
+## Windows 安裝腳本紅線（踩過兩次坑）
+- `.cmd` / `.bat` **必須 CRLF**：bare LF 會讓 cmd.exe 解析爆掉 → 無限亂碼迴圈。
+- **不要用 `.gitattributes` 的 `text eol=crlf`**：那會讓 git 在 object 裡存 LF、只在 checkout 時展開，
+  而 GitHub raw 端點直接吐 blob → 使用者下載到的還是 LF。
+  要寫 **`*.cmd -text`**，並 `git add --renormalize`，確認 `git ls-files --eol` 是 `i/crlf w/crlf`。
+- **raw 端點有 CDN 快取**（branch 名）→ installer 應先用 GitHub API 把 branch 解析成 commit SHA，
+  再 `git fetch --depth 1 <sha>`；SHA 不可變最穩。
+- 驗證要驗「使用者真的會下載到的那個 URL」，不是只驗本地檔案。
+- `install.cmd` 保持純 ASCII（em-dash 在 OEM 主控台會變 `??`）。
+
 ## 核心事實（不要重新摸索）
 - `~/.grok/auth.json` 是 **map**：key = `https://auth.x.ai::<client_id>`，
   value = `{ key, refresh_token, email, user_id, expires_at, oidc_client_id, oidc_issuer, ... }`。
@@ -36,6 +46,8 @@ Node.js CLI，管理多個 Grok CLI 帳號。**對外指令名稱：`MultiGrokSt
 - `src/commands.js` — login / logout / switch
 - `src/cli.js` — chalk 輸出與指令分派
 - `test/run.js` — 離線測試 harness（mock API + 暫存 GROK_HOME），`npm test`
+- `install.cmd` / `install.ps1` — 一鍵安裝（CRLF、純 ASCII、SHA-based fetch）
+- `.gitattributes` — `*.cmd -text`（見上方紅線，勿改回 `eol=crlf`）
 
 ## 測試
 - `npm test` = `node test/run.js`，21 項檢查，不碰真實 `~/.grok`。
