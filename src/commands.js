@@ -6,14 +6,16 @@ import path from 'node:path';
 import {
   readLiveAuth,
   primaryCredential,
+  listCredentials,
   identityOf,
   displayName,
+  expiresAt,
   writeAccount,
   listAccounts,
   isActive,
   authJsonPath,
 } from './accounts.js';
-import { grokHome } from './paths.js';
+import { grokHome, accountFilePath, sanitizeName } from './paths.js';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -78,21 +80,79 @@ export async function login(name, { quiet = false } = {}) {
 }
 
 /**
- * /logout — remove the live auth.json so Grok returns to signed-out state.
- * Archives are left untouched (that's the whole point of this tool).
+ * Resolve the *identity* of the live session, which is not simply
+ * `primaryCredential().email` — auth.json is a map and previous `switch`
+ * calls leave other identities behind. The entry Grok actually uses is the
+ * one whose access token is freshest, so that is the entry we name the
+ * archive after.
+ *
+ * Returns { auth, cred, email, name } or null when nothing usable exists.
  */
-export function logout({ backupName } = {}) {
+export function resolveLiveIdentity(auth) {
+  if (!auth) return null;
+  const creds = listCredentials(auth);
+  if (!creds.length) return null;
+
+  const newest = creds
+    .slice()
+    .sort((a, b) => (expiresAt(b.data) ?? 0) - (expiresAt(a.data) ?? 0))[0];
+  const cred = newest.data.email ? newest : primaryCredential(auth) || newest;
+
+  const email = cred.data.email || null;
+  // "goldshoot0720@gmail.com" → "goldshoot0720", sanitised for the filesystem.
+  const localPart = email ? email.split('@')[0] : '';
+  const name = sanitizeName(localPart) || sanitizeName(identityOf(cred.data)) || null;
+
+  return { auth, cred, email, name };
+}
+
+/**
+ * /logout — archive the live session, then remove `auth.json` (and the
+ * `auth.json.lock` Grok leaves beside it) so the CLI returns to signed-out.
+ *
+ * The archive is named after the account's *email* — `goldshoot0720_auth.json`
+ * — because that is the field that distinguishes two identities, and it keeps
+ * `login` and `logout` writing the same filename. Pass `name` to override.
+ *
+ * Existing archives are never overwritten unless `force` is set.
+ */
+export function logout({ name, force = false } = {}) {
   const file = authJsonPath();
-  if (!fs.existsSync(file)) return { removed: false };
+  const lock = `${file}.lock`;
+
+  if (!fs.existsSync(file)) {
+    removeLock(lock);
+    return { removed: false, removedLock: false, backedUp: null, name: null, kept: false };
+  }
+
+  const resolved = resolveLiveIdentity(readLiveAuth());
+  const target = sanitizeName(name) || resolved?.name || null;
 
   let backedUp = null;
-  if (backupName) {
-    const auth = readLiveAuth();
-    if (auth) backedUp = writeAccount(backupName, auth);
+  let kept = false;
+
+  if (target) {
+    const dest = accountFilePath(target);
+    if (fs.existsSync(dest) && !force) {
+      // Already archived — don't clobber an untouched copy with a session
+      // whose tokens may be older (or already rotated).
+      kept = true;
+    } else {
+      backedUp = writeAccount(target, resolved.auth);
+    }
   }
 
   fs.rmSync(file, { force: true });
-  return { removed: true, backedUp };
+  const removedLock = removeLock(lock);
+
+  return { removed: true, removedLock, backedUp, name: target, email: resolved?.email || null, kept };
+}
+
+/** Drop Grok's advisory lock file if it is still around. */
+function removeLock(lock) {
+  if (!fs.existsSync(lock)) return false;
+  fs.rmSync(lock, { force: true });
+  return true;
 }
 
 /**
