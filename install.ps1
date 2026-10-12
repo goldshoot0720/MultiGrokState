@@ -7,7 +7,7 @@
     Installs MultiGrokState — a multi-account manager for the Grok CLI.
 
     One-liner:
-        irm https://raw.githubusercontent.com/<owner>/MultiGrokState/main/install.ps1 | iex
+        irm https://raw.githubusercontent.com/goldshoot0720/MultiGrokState/main/install.ps1 | iex
 
     Or with options:
         & ([scriptblock]::Create((irm .../install.ps1))) -InstallDir 'C:\Tools\MultiGrokState'
@@ -16,7 +16,7 @@
     Where to install. Default: $env:USERPROFILE\.multigrokstate
 
 .PARAMETER Repo
-    Source repository (owner/name). Default: chbon/MultiGrokState
+    Source repository (owner/name). Default: goldshoot0720/MultiGrokState
 
 .PARAMETER Branch
     Branch or tag to install. Default: main

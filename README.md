@@ -34,6 +34,18 @@ PowerShell options — run it as a script block if you need to pass them:
     -InstallDir 'C:\Tools\MultiGrokState' -NoPath
 ```
 
+> **If `irm` fails with `WebCmdletWebResponseException` / `HttpWebRequest`**
+> this is a TLS or proxy problem in your PowerShell session, not with the
+> script. Force TLS 1.2 first, then retry:
+>
+> ```powershell
+> [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+> irm https://raw.githubusercontent.com/goldshoot0720/MultiGrokState/main/install.ps1 | iex
+> ```
+>
+> Or use the CMD variant below, which uses `curl` and avoids PowerShell's
+> HTTP stack entirely.
+
 ### Manual install
 
 ```bash

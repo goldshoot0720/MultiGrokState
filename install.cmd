@@ -6,7 +6,7 @@ REM  MultiGrokState installer for Windows CMD
 REM  Use this when PowerShell is unavailable.
 REM
 REM  Usage:
-REM    curl -fsSL https://raw.githubusercontent.com/chbon/MultiGrokState/main/install.cmd -o install.cmd && install.cmd && del install.cmd
+REM    curl -fsSL https://raw.githubusercontent.com/goldshoot0720/MultiGrokState/main/install.cmd -o install.cmd && install.cmd && del install.cmd
 REM ===================================================================
 
 set "REPO=goldshoot0720/MultiGrokState"
