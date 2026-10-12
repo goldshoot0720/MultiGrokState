@@ -19,7 +19,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
-const gs = path.join(root, 'bin', 'gs.js');
+const gs = path.join(root, 'bin', 'multigrokstate.js');
 
 /**
  * Prefer the node that is running this file. `node` may be an absolute path
@@ -283,6 +283,51 @@ async function main() {
     check('gamma weekly 12.0%', usage.stdout.includes('12.0%'), usage.stdout);
     check('product breakdown shown (grok-build)', usage.stdout.includes('grok-build'), usage.stdout);
 
+    console.log('\n\x1b[1m2b. --json output  (consumed by the desktop GUI)\x1b[0m');
+    const listJson = await runGs(['list', '--json']);
+    let listData = [];
+    let listParsed = false;
+    try {
+      listData = JSON.parse(listJson.stdout);
+      listParsed = Array.isArray(listData);
+    } catch {
+      listParsed = false;
+    }
+    check('list --json is valid JSON', listParsed, listJson.stdout);
+    check('list --json returns every archive', listData.length === 4, listJson.stdout);
+    check(
+      'list --json marks exactly the active account',
+      listData.filter((a) => a.isActive).map((a) => a.name).join() === 'alpha',
+      listJson.stdout
+    );
+    check(
+      'list --json carries email + token status',
+      listData.every((a) => 'email' in a && 'status' in a && 'displayName' in a),
+      listJson.stdout
+    );
+
+    const usageJson = await runGs(['usage', '--json']);
+    let usageData = [];
+    try {
+      usageData = JSON.parse(usageJson.stdout);
+    } catch {
+      usageData = [];
+    }
+    check('usage --json is valid JSON', Array.isArray(usageData) && usageData.length === 4, usageJson.stdout);
+    const alphaU = usageData.find((u) => u.name === 'alpha') || {};
+    check('usage --json reports alpha weekly 83.5', alphaU.ok === true && alphaU.creditUsagePercent === 83.5, JSON.stringify(alphaU));
+    check(
+      'usage --json carries the monthly window',
+      alphaU.monthly && alphaU.monthly.limit === 500 && alphaU.monthly.used === 206,
+      JSON.stringify(alphaU.monthly)
+    );
+    check('usage --json derives the monthly percent', alphaU.monthly && Math.abs(alphaU.monthly.creditUsagePercent - 41.2) < 0.001, JSON.stringify(alphaU.monthly));
+    check('usage --json carries productUsage', alphaU.productUsage && alphaU.productUsage['grok-build'] === 83.5, JSON.stringify(alphaU.productUsage));
+    check('usage --json carries the weekly reset', alphaU.periodEnd === '2026-10-18T13:37:26.239595+00:00', String(alphaU.periodEnd));
+    const betaU = usageData.find((u) => u.name === 'beta') || {};
+    check('usage --json flags a no-cap window', betaU.noCapReported === true, JSON.stringify(betaU));
+    check('usage --json surfaces per-account errors', usageData.every((u) => 'ok' in u && 'error' in u), usageJson.stdout);
+
     console.log('\n\x1b[1m3. token refresh was persisted\x1b[0m');
     const alphaAfter = JSON.parse(fs.readFileSync(path.join(accountsDir, 'alpha_auth.json'), 'utf8'));
     const alphaToken = Object.values(alphaAfter)[0].key;
@@ -359,6 +404,9 @@ async function main() {
     // (numeric +00:00 offset, microsecond precision, missing fields).
     const fd = await import(pathToFileURL(path.join(root, 'src', 'usage.js')).href);
     const plusOffset = '2026-10-18T13:37:26.239595+00:00';
+    // 6d 2h ahead of "now", so the countdown / day-count assertions hold
+    // whenever the suite runs instead of only before the fixture date.
+    const future = new Date(Date.now() + 6 * 86_400_000 + 2 * 3_600_000).toISOString();
     check('parseTimestamp accepts +00:00 offset', fd.parseTimestamp(plusOffset) != null);
     check('parseTimestamp accepts microseconds', fd.parseTimestamp(plusOffset) === Date.parse('2026-10-18T13:37:26.239Z'));
     check('parseTimestamp returns null on junk', fd.parseTimestamp('not-a-date') === null && fd.parseTimestamp(null) === null && fd.parseTimestamp('') === null);
@@ -366,15 +414,24 @@ async function main() {
     check('formatResetTime withYear appends the year', /, 2026$/.test(fd.formatResetTime(plusOffset, { withYear: true })), fd.formatResetTime(plusOffset, { withYear: true }));
     check('formatResetTime returns null on junk', fd.formatResetTime('nope') === null);
     check('formatCountdown returns null on junk', fd.formatCountdown('nope') === null);
-    check('formatCountdown reports a positive window', /^\d+d \d+h$/.test(fd.formatCountdown(plusOffset)), fd.formatCountdown(plusOffset));
-    check('daysUntil floors (never overstates)', fd.daysUntil(plusOffset) === 6, String(fd.daysUntil(plusOffset)));
+    check('formatCountdown reports a positive window', /^\d+d \d+h$/.test(fd.formatCountdown(future)), fd.formatCountdown(future));
+    // The fixture's own reset date is a hard-coded calendar day, so the
+    // countdown/day checks run against a timestamp a fixed distance ahead —
+    // otherwise they would start failing the moment the clock passes it.
+    check('daysUntil floors (never overstates)', (() => {
+      const remaining = fd.parseTimestamp(future) - Date.now();
+      const days = fd.daysUntil(future);
+      const notOverstated = days * 86_400_000 <= remaining;
+      const isFloor = remaining - days * 86_400_000 < 86_400_000;
+      return notOverstated && isFloor;
+    })(), `${fd.daysUntil(future)} vs ${((fd.parseTimestamp(future) - Date.now()) / 86_400_000).toFixed(3)}d`);
     check('daysUntil is 0 for a past timestamp', fd.daysUntil('2020-01-01T00:00:00Z') === 0, String(fd.daysUntil('2020-01-01T00:00:00Z')));
     check('day count never exceeds countdown', (() => {
-      const d = fd.daysUntil(plusOffset);
-      const cd = fd.formatCountdown(plusOffset);
+      const d = fd.daysUntil(future);
+      const cd = fd.formatCountdown(future);
       const cdDays = parseInt(cd, 10);
       return d <= cdDays;
-    })(), `${fd.daysUntil(plusOffset)} vs ${fd.formatCountdown(plusOffset)}`);
+    })(), `${fd.daysUntil(future)} vs ${fd.formatCountdown(future)}`);
 
     console.log('\n\x1b[1m11. display name / email identity\x1b[0m');
     const acct = await import(pathToFileURL(path.join(root, 'src', 'accounts.js')).href);

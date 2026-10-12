@@ -4,12 +4,12 @@
   "description": "Multi-account manager for Grok CLI — login/logout via auth.json copy, plus live usage/quota panel",
   "type": "module",
   "bin": {
-    "MultiGrokState": "./bin/gs.js",
-    "multigrokstate": "./bin/gs.js"
+    "MultiGrokState": "./bin/multigrokstate.js",
+    "multigrokstate": "./bin/multigrokstate.js"
   },
   "scripts": {
-    "start": "node bin/gs.js",
-    "list": "node bin/gs.js list",
+    "start": "node bin/multigrokstate.js",
+    "list": "node bin/multigrokstate.js list",
     "test": "node test/run.js"
   },
   "dependencies": {

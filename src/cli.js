@@ -158,8 +158,24 @@ function resetLine(value, { label = 'Resets' } = {}) {
 /* ------------------------------------------------------------------ */
 
 async function cmdList(argv) {
+  const json = argv.includes('--json');
   const live = Boolean(argv.includes('--usage') || argv.includes('-u'));
   const accounts = listAccounts();
+
+  if (json) {
+    const liveAuth = readLiveAuth();
+    const liveId = liveAuth ? identityOf(primaryCredential(liveAuth)?.data || {}) : null;
+    const out = accounts.map((a) => ({
+      name: a.name,
+      email: a.email,
+      displayName: a.displayName,
+      status: a.status,
+      expiresAt: a.expiresAt,
+      isActive: Boolean(liveId && a.credential && identityOf(a.credential.data) === liveId),
+    }));
+    process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+    return;
+  }
 
   if (!accounts.length) {
     console.log();
@@ -242,9 +258,51 @@ async function printUsageTable(accounts) {
 }
 
 async function cmdUsage(argv) {
+  const json = argv.includes('--json');
   const only = argv.filter((a) => !a.startsWith('-'));
   const all = listAccounts();
   const accounts = only.length ? all.filter((a) => only.includes(a.name)) : all;
+
+  if (json) {
+    const out = [];
+    for (const a of accounts) {
+      if (!a.credential) {
+        out.push({ name: a.name, email: a.email, ok: false, error: 'no credential' });
+        continue;
+      }
+      try {
+        const u = await fetchUsage(a.credential, {
+          onTokenRefreshed: (data) => updateAccountCredential(a.name, data),
+        });
+        out.push({
+          name: a.name,
+          email: a.email,
+          ok: u.ok,
+          creditUsagePercent: u.creditUsagePercent,
+          limit: u.limit,
+          used: u.used,
+          periodType: u.periodType,
+          periodEnd: u.periodEnd,
+          monthly: u.monthly
+            ? {
+                creditUsagePercent: u.monthly.creditUsagePercent,
+                limit: u.monthly.limit,
+                used: u.monthly.used,
+                periodEnd: u.monthly.periodEnd,
+              }
+            : null,
+          productUsage: u.productUsage,
+          prepaidBalance: u.prepaidBalance,
+          noCapReported: u.noCapReported,
+          error: u.ok ? null : u.error,
+        });
+      } catch (err) {
+        out.push({ name: a.name, email: a.email, ok: false, error: err.message });
+      }
+    }
+    process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+    return;
+  }
 
   if (!accounts.length) {
     console.log();
@@ -478,7 +536,9 @@ ${chalk.bold('  Usage')}
     ${chalk.cyan(`${CMD} switch <name>`)}       Copy an archived account into the live auth.json
     ${chalk.cyan(`${CMD} list`)}                List archived accounts
     ${chalk.cyan(`${CMD} list --usage`)}        List accounts and fetch live quota
+    ${chalk.cyan(`${CMD} list --json`)}         Same, as JSON (for the desktop GUI / scripts)
     ${chalk.cyan(`${CMD} usage [name...]`)}     Show weekly / monthly usage, reset time & quota
+    ${chalk.cyan(`${CMD} usage --json`)}        Same, as JSON
     ${chalk.cyan(`${CMD} update`)}              Check GitHub and pull the latest version
     ${chalk.cyan(`${CMD} update --check`)}      Only report whether an update is available
     ${chalk.cyan(`${CMD} where`)}               Print the resolved paths
@@ -509,9 +569,13 @@ export async function runCli(argv) {
   const [cmd, ...rest] = argv;
 
   // Suppress the background check when the user is already managing updates
-  // directly, or has opted out.
+  // directly, has opted out, or asked for machine-readable output — a stray
+  // notice line would corrupt the JSON stream.
   const wantsNotice =
-    process.env.GROK_NO_UPDATE_CHECK !== '1' && cmd !== 'update' && cmd !== 'upgrade';
+    process.env.GROK_NO_UPDATE_CHECK !== '1' &&
+    cmd !== 'update' &&
+    cmd !== 'upgrade' &&
+    !argv.includes('--json');
 
   if (wantsNotice) {
     // Never let a slow network stall the real command: give the check a short
@@ -543,6 +607,20 @@ export async function runCli(argv) {
     case 'upgrade':
       return cmdUpdate(rest);
     case 'where':
+      if (argv.includes('--json')) {
+        process.stdout.write(
+          JSON.stringify(
+            {
+              grokHome: authJsonPath(),
+              archives: accountsDir(),
+              grokBinary: findGrokBinary(),
+            },
+            null,
+            2,
+          ) + '\n',
+        );
+        return;
+      }
       console.log();
       console.log(chalk.gray('  grok home   ') + chalk.white(authJsonPath()));
       console.log(chalk.gray('  archives    ') + chalk.white(accountsDir()));

@@ -58,7 +58,7 @@ MultiGrokState           # show help
 Run it in place without linking:
 
 ```bash
-node bin/gs.js list          # from the project directory
+node bin/multigrokstate.js list          # from the project directory
 ```
 
 ```
@@ -318,16 +318,17 @@ the field layout Grok uses (`key`, `refresh_token`, `expires_at` as an RFC3339
 ## Layout
 
 ```
-bin/gs.js          CLI entry point (the file name is internal; the command is MultiGrokState)
-src/paths.js       path resolution + name sanitising
-src/accounts.js    auth.json parsing, archive read/write, JWT decode
-src/usage.js       billing endpoint, token refresh, response normalisation
-src/commands.js    login / logout / switch implementations
-src/version.js     update checking (local HEAD vs GitHub SHA, TTL cache)
-src/cli.js         chalk rendering + command dispatch
-test/run.js        local test harness (mock API + isolated GROK_HOME)
-install.ps1        PowerShell installer (irm ... | iex)
-install.cmd        CMD installer (curl -o ... && ... && del)
+bin/multigrokstate.js   CLI entry point (the command it installs is MultiGrokState)
+src/paths.js            path resolution + name sanitising
+src/accounts.js         auth.json parsing, archive read/write, JWT decode
+src/usage.js            billing endpoint, token refresh, response normalisation
+src/commands.js         login / logout / switch implementations
+src/version.js          update checking (local HEAD vs GitHub SHA, TTL cache)
+src/cli.js              chalk rendering + command dispatch, --json output
+test/run.js             local test harness (mock API + isolated GROK_HOME)
+gui/                    Avalonia desktop front-end (see Desktop GUI)
+install.ps1             PowerShell installer (irm ... | iex)
+install.cmd             CMD installer (curl -o ... && ... && del)
 ```
 
 ## Uninstall
@@ -352,17 +353,60 @@ file in place and restored it in a `finally` block; a killed run left the real
 CLI pointing at a dead localhost port. A test guards against that regression.)
 
 ```bash
-npm test              # run all 76 checks
+npm test              # run all 96 checks
 node test/run.js --keep   # keep the sandbox for manual poking
 ```
 
 Covered: archive listing, active-account detection, email/display-name
 identity (including collapsed duplicate names), usage rendering (reported and
-derived percentages), reset-time formatting (date, countdown, timezone
-handling, malformed input), token rotation persistence, switch, logout
-(archives the live session under its email, removes `auth.json` and
-`auth.json.lock`, keeps existing archives, `-f` force-overwrite), unknown-account
-errors, path traversal rejection, and source-file integrity.
+derived percentages), `--json` output for the desktop GUI, reset-time
+formatting (date, countdown, timezone handling, malformed input), token
+rotation persistence, switch, logout (archives the live session under its
+email, removes `auth.json` and `auth.json.lock`, keeps existing archives,
+`-f` force-overwrite), unknown-account errors, path traversal rejection, and
+source-file integrity.
+
+## Desktop GUI (Avalonia)
+
+A cross-platform desktop front-end lives in `gui/`. It shells out to the CLI
+(`list --json` / `usage --json`) rather than re-implementing token handling, so
+there is exactly one source of truth for auth and quota logic.
+
+### Run it
+
+```cmd
+gui\run.cmd
+```
+
+The first run builds the project (requires the **.NET SDK 8.0+**) and then
+launches the window. To build manually instead:
+
+```bash
+cd gui/MultiGrokStateGui
+dotnet build -c Release
+```
+
+### What it does
+
+- Lists every archived account with its email, token status and live quota.
+- Shows the weekly / monthly usage bar, allowance total and reset countdown
+  (a window that reports no usage still renders `0.0%`, matching the CLI).
+- **Switch** writes an archive back into the live `auth.json` — one click.
+- **Login / Logout** open a terminal window for the normal Grok browser flow,
+  then the list refreshes automatically when that window closes.
+- **Check updates / Update** mirror `MultiGrokState update`.
+
+### Which CLI does it call?
+
+In order:
+
+1. `MULTIGROKSTATE_CLI` environment variable (explicit override).
+2. `bin/multigrokstate.js` inside this repository — so a local build always matches the
+   source it came from, even if the globally installed copy is older.
+3. The globally installed `MultiGrokState` command.
+
+> The `--json` output mode (`list --json`, `usage --json`, `where --json`) is
+> what the GUI consumes; it is also handy for scripting.
 
 ## Security
 
