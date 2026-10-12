@@ -123,8 +123,15 @@ MultiGrokState where            # print resolved paths
 ## Updating
 
 `MultiGrokState update` resolves the `main` branch to a commit SHA on GitHub,
-compares it against the local `HEAD`, and — if they differ — runs
-`git pull --ff-only` followed by `npm link`, then reports the new revision.
+compares it against the local `HEAD`, and — if they differ — moves the checkout
+onto that exact commit and re-links the global command, then reports the new
+revision.
+
+It deliberately does **not** use `git pull`: the installer leaves the checkout
+**detached** at `FETCH_HEAD`, and `git pull` on a detached HEAD is a silent
+no-op that still reports success. Instead it fetches that single commit
+(`git fetch --depth 1 origin <sha>`) and hard-resets onto it — but only after
+confirming the working tree is clean, so local edits are never discarded.
 
 ```
 $ MultiGrokState update --check
@@ -411,7 +418,7 @@ file in place and restored it in a `finally` block; a killed run left the real
 CLI pointing at a dead localhost port. A test guards against that regression.)
 
 ```bash
-npm test              # run all 96 checks
+npm test              # run all 98 checks
 node test/run.js --keep   # keep the sandbox for manual poking
 ```
 
