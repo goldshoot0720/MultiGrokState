@@ -1,10 +1,12 @@
-# Windows batch files must use CRLF or cmd.exe misparses them
-# (bare LF causes loops to garble and constructs like for /f to break).
-*.cmd text eol=crlf
-*.bat text eol=crlf
-
-# PowerShell is happy with either, but be explicit.
-*.ps1 text eol=crlf
+# Windows batch files MUST contain CRLF bytes in the repository itself.
+#
+# Do NOT use "text eol=crlf" here: that normalises to LF in the git object,
+# so GitHub's raw endpoint (used by the curl one-liner) would still serve LF
+# and cmd.exe would misparse the script into a garbled infinite loop.
+# Marking them "-text" keeps the working-tree bytes verbatim in the blob.
+*.cmd -text
+*.bat -text
+*.ps1 -text
 
 # Shell scripts must stay LF.
 *.sh text eol=lf
