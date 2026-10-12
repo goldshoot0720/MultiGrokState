@@ -101,8 +101,20 @@ if ((Test-Path $InstallDir) -and -not $Force) {
 
 if ((Test-Path (Join-Path $InstallDir ".git")) -and -not $Force) {
     Write-Step "Pulling latest from $Branch..."
+
+    # Prefer the immutable commit SHA — see the clone path below for why.
+    $updSha = $null
     try {
-        git -C $InstallDir fetch --depth 1 origin $Branch 2>&1 | Out-Null
+        $updApi = Invoke-RestMethod -UseBasicParsing -TimeoutSec 20 `
+            -Uri "https://api.github.com/repos/$Repo/commits/$Branch" `
+            -Headers @{ 'Accept' = 'application/vnd.github+json'; 'User-Agent' = 'MultiGrokState-installer' }
+        $updSha = $updApi.sha
+    }
+    catch { }
+
+    try {
+        $fetchRef = if ($updSha) { $updSha } else { $Branch }
+        git -C $InstallDir fetch --depth 1 origin $fetchRef 2>&1 | Out-Null
         git -C $InstallDir checkout -q FETCH_HEAD 2>&1 | Out-Null
         Write-Ok "source updated"
     }
@@ -122,16 +134,42 @@ if (-not (Test-Path (Join-Path $InstallDir "package.json"))) {
     # the result by the exit code instead.
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
+    $cloneExit = 1
     try {
-        git clone --depth 1 --branch $Branch "https://github.com/$Repo.git" $InstallDir 2>&1 | Out-Null
-        $cloneExit = $LASTEXITCODE
+        # Resolve the branch to a concrete commit SHA first. Branch-name URLs
+        # are served through a CDN with a long TTL, so right after a fix is
+        # pushed a fresh clone can still pull the previous (broken) revision.
+        # The SHA is immutable and therefore never stale.
+        $sha = $null
+        try {
+            $api = Invoke-RestMethod -UseBasicParsing -TimeoutSec 20 `
+                -Uri "https://api.github.com/repos/$Repo/commits/$Branch" `
+                -Headers @{ 'Accept' = 'application/vnd.github+json'; 'User-Agent' = 'MultiGrokState-installer' }
+            $sha = $api.sha
+        }
+        catch {
+            Write-Warn2 "Could not resolve $Branch to a commit SHA; using the branch name directly."
+        }
+
+        if ($sha) {
+            Write-Step "Fetching commit $($sha.Substring(0, 7)) on $Branch..."
+            git init -q $InstallDir
+            git -C $InstallDir remote add origin "https://github.com/$Repo.git"
+            git -C $InstallDir fetch -q --depth 1 origin $sha
+            git -C $InstallDir checkout -q FETCH_HEAD
+            $cloneExit = $LASTEXITCODE
+        }
+        else {
+            git clone --depth 1 --branch $Branch "https://github.com/$Repo.git" $InstallDir 2>&1 | Out-Null
+            $cloneExit = $LASTEXITCODE
+        }
     }
     finally {
         $ErrorActionPreference = $prevEap
     }
 
     if ($cloneExit -ne 0 -or -not (Test-Path (Join-Path $InstallDir "package.json"))) {
-        Write-Host "  Failed to clone https://github.com/$Repo.git (exit code $cloneExit)" -ForegroundColor Red
+        Write-Host "  Failed to fetch https://github.com/$Repo.git (exit code $cloneExit)" -ForegroundColor Red
         Write-Host "  Check the repository name, the branch '$Branch', and your network connection." -ForegroundColor Gray
         exit 1
     }

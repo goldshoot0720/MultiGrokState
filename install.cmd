@@ -60,8 +60,16 @@ REM --- Fetch source ----------------------------------------------------
 if exist "!INSTALL_DIR!\package.json" (
     echo.
     echo   Already installed at !INSTALL_DIR! — updating...
+
+    set "UPD_SHA="
+    for /f "usebackq tokens=*" %%s in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $ProgressPreference='SilentlyContinue'; (Invoke-RestMethod -UseBasicParsing -TimeoutSec 20 -Headers @{'User-Agent'='MultiGrokState-installer';'Accept'='application/vnd.github+json'} -Uri 'https://api.github.com/repos/!REPO!/commits/!BRANCH!').sha } catch { }" 2^>nul`) do set "UPD_SHA=%%s"
+
     if exist "!INSTALL_DIR!\.git" (
-        git -C "!INSTALL_DIR!" fetch --depth 1 origin !BRANCH! >nul 2>&1
+        if defined UPD_SHA (
+            git -C "!INSTALL_DIR!" fetch --depth 1 origin !UPD_SHA! >nul 2>&1
+        ) else (
+            git -C "!INSTALL_DIR!" fetch --depth 1 origin !BRANCH! >nul 2>&1
+        )
         if !ERRORLEVEL! equ 0 (
             git -C "!INSTALL_DIR!" checkout -q FETCH_HEAD >nul 2>&1
             echo   [ok] source updated
@@ -73,12 +81,34 @@ if exist "!INSTALL_DIR!\package.json" (
         rmdir /s /q "!INSTALL_DIR!"
     )
 )
-
 if not exist "!INSTALL_DIR!\package.json" (
     echo   Downloading source to !INSTALL_DIR!...
     if exist "!INSTALL_DIR!" rmdir /s /q "!INSTALL_DIR!"
-    git clone --depth 1 --branch !BRANCH! "https://github.com/!REPO!.git" "!INSTALL_DIR!" >nul 2>&1
-    if !ERRORLEVEL! neq 0 (
+
+    REM Resolve the branch to a concrete commit SHA first. Branch-name URLs
+    REM go through a CDN with a long TTL, so a fresh clone right after a fix
+    REM can still bring down the previous revision. A SHA never goes stale.
+    set "SHA="
+    for /f "usebackq tokens=*" %%s in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $ProgressPreference='SilentlyContinue'; (Invoke-RestMethod -UseBasicParsing -TimeoutSec 20 -Headers @{'User-Agent'='MultiGrokState-installer';'Accept'='application/vnd.github+json'} -Uri 'https://api.github.com/repos/!REPO!/commits/!BRANCH!').sha } catch { }" 2^>nul`) do set "SHA=%%s"
+
+    if defined SHA (
+        echo   Fetching commit !SHA:~0,7! on !BRANCH!...
+        git init -q "!INSTALL_DIR!" >nul 2>&1
+        git -C "!INSTALL_DIR!" remote add origin "https://github.com/!REPO!.git" >nul 2>&1
+        git -C "!INSTALL_DIR!" fetch --depth 1 origin !SHA! >nul 2>&1
+        if !ERRORLEVEL! equ 0 (
+            git -C "!INSTALL_DIR!" checkout -q FETCH_HEAD >nul 2>&1
+        ) else (
+            echo   [!!] SHA fetch failed, falling back to the branch name
+            rmdir /s /q "!INSTALL_DIR!"
+        )
+    )
+
+    if not exist "!INSTALL_DIR!\package.json" (
+        git clone --depth 1 --branch !BRANCH! "https://github.com/!REPO!.git" "!INSTALL_DIR!" >nul 2>&1
+    )
+
+    if not exist "!INSTALL_DIR!\package.json" (
         echo   Failed to clone https://github.com/!REPO!.git >&2
         echo   Check the repository name and your network connection. >&2
         exit /b 1
