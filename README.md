@@ -243,8 +243,19 @@ result:
 
 Money fields arrive wrapped as `{ val: n }`, so the parser unwraps them.
 When `creditUsagePercent` is missing the percentage is derived from
-`used / limit`; if there's no cap either, the bar shows `—` and the row reads
-`no capped allowance on this plan`.
+`used / limit`.
+
+A SuperGrok weekly window frequently carries **no usage fields at all** — no
+`creditUsagePercent`, no `productUsage`, no limit. The Grok CLI displays that as
+`0%` rather than a blank, so we do the same and add a note that the bar is a
+placeholder:
+
+```
+    weekly  ░░░░░░░░░░░░░░░░░░░░ 0.0%
+            Resets: October 18, 21:37, 2026 (in 6d 1h)
+    ...
+    plan reports no usage for this window (bar shown at 0%)
+```
 
 #### Reset time
 
@@ -341,7 +352,7 @@ file in place and restored it in a `finally` block; a killed run left the real
 CLI pointing at a dead localhost port. A test guards against that regression.)
 
 ```bash
-npm test              # run all 72 checks
+npm test              # run all 76 checks
 node test/run.js --keep   # keep the sandbox for manual poking
 ```
 

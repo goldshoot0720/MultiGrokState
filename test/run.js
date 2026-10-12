@@ -275,7 +275,11 @@ async function main() {
     check('alpha weekly 83.5%', usage.stdout.includes('83.5%'), usage.stdout);
     check('renders a progress bar', /█+░+/.test(usage.stdout), usage.stdout);
     check('beta reports no capped allowance', usage.stdout.includes('no capped allowance'), usage.stdout);
-    check('beta monthly has zero limit so no percentage', /beta[\s\S]*?monthly[^\n]*—/.test(usage.stdout), usage.stdout);
+    // A plan with no reported usage renders 0%, matching the Grok CLI panel,
+    // rather than a blank em-dash.
+    check('beta weekly with no data still shows 0.0%', /beta[\s\S]*?weekly[^\n]*0\.0%/.test(usage.stdout), usage.stdout);
+    check('beta monthly with zero limit shows 0.0%', /beta[\s\S]*?monthly[^\n]*0\.0%/.test(usage.stdout), usage.stdout);
+    check('no-cap plan says the bar is a placeholder', usage.stdout.includes('bar shown at 0%'), usage.stdout);
     check('gamma weekly 12.0%', usage.stdout.includes('12.0%'), usage.stdout);
     check('product breakdown shown (grok-build)', usage.stdout.includes('grok-build'), usage.stdout);
 

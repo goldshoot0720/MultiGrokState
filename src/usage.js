@@ -185,10 +185,19 @@ export function parseBilling(body) {
     source = 'derived';
   }
 
+  // A SuperGrok weekly window often carries no usage fields at all — no
+  // creditUsagePercent, no productUsage, no limit. The Grok CLI renders that
+  // as "0%" rather than a blank, so we flag it and let the UI do the same.
+  const hasUsageData =
+    percent != null || Object.keys(productUsage).length > 0 || (limit != null && limit > 0);
+  const noCapReported = percent == null && !hasUsageData;
+
   return {
     ok: true,
     creditUsagePercent: percent,
     percentSource: source,
+    hasUsageData,
+    noCapReported,
     limit,
     used,
     productUsage,

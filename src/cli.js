@@ -6,7 +6,7 @@ import { listAccounts, readLiveAuth, primaryCredential, displayName, identityOf,
 import { fetchUsage, bar, formatResetTime, formatCountdown, daysUntil, parseTimestamp } from './usage.js';
 import { login, logout, switchTo, findGrokBinary } from './commands.js';
 import { accountsDir, authJsonPath } from './paths.js';
-import { ROOT, REPO, BRANCH, checkForUpdate, cachedUpdateNotice, shortSha } from './version.js';
+import { ROOT, REPO, BRANCH, checkForUpdate, cachedUpdateNotice, syncToRemote, shortSha } from './version.js';
 
 const STATUS_STYLE = {
   valid: (s) => chalk.green(s),
@@ -223,7 +223,8 @@ async function printUsageTable(accounts) {
         console.log(`${indent}${chalk.red(`✖ ${u.error}`)}`);
         continue;
       }
-      const pct = u.creditUsagePercent;
+      // Match `usage`: a plan with no reported allowance renders 0%, not blank.
+      const pct = u.creditUsagePercent ?? (u.noCapReported ? 0 : null);
       const period = u.periodType === 'weekly' ? 'wk' : u.periodType === 'monthly' ? 'mo' : '  ';
       const allowance = allowanceText(u);
       console.log(
@@ -271,12 +272,16 @@ async function cmdUsage(argv) {
         console.log();
         continue;
       }
-      console.log(`    weekly  ${paintBar(u.creditUsagePercent)} ${paintPercent(u.creditUsagePercent)}`);
+      // A plan with no reported allowance (common on SuperGrok weekly) still
+      // renders a bar at 0%, the way the Grok CLI does, rather than a blank.
+      const weeklyPct = u.creditUsagePercent ?? (u.noCapReported ? 0 : null);
+      console.log(`    weekly  ${paintBar(weeklyPct)} ${paintPercent(weeklyPct)}`);
       if (allowanceText(u)) console.log(`            ${allowanceText(u)}`);
       const weeklyReset = resetLine(u.periodEnd);
       if (weeklyReset) console.log(`            ${weeklyReset}`);
       if (u.monthly) {
-        console.log(`    monthly ${paintBar(u.monthly.creditUsagePercent)} ${paintPercent(u.monthly.creditUsagePercent)}`);
+        const monthlyPct = u.monthly.creditUsagePercent ?? (u.monthly.noCapReported ? 0 : null);
+        console.log(`    monthly ${paintBar(monthlyPct)} ${paintPercent(monthlyPct)}`);
         if (allowanceText(u.monthly)) console.log(`            ${allowanceText(u.monthly)}`);
         const monthlyReset = resetLine(u.monthly.periodEnd);
         if (monthlyReset) console.log(`            ${monthlyReset}`);
@@ -287,8 +292,8 @@ async function cmdUsage(argv) {
       if (u.prepaidBalance != null) {
         console.log(`    ${chalk.gray('prepaid balance')} ${chalk.white(u.prepaidBalance)}`);
       }
-      if (u.creditUsagePercent == null) {
-        console.log(`    ${chalk.gray('plan reports no capped credit allowance')}`);
+      if (u.noCapReported) {
+        console.log(`    ${chalk.gray('plan reports no usage for this window (bar shown at 0%)')}`);
       }
     } catch (err) {
       console.log(`    ${chalk.red('✖ ' + err.message)}`);
@@ -357,19 +362,15 @@ function cmdSwitch(argv) {
 /* ------------------------------------------------------------------ */
 
 /**
- * Pull the latest source and re-link the global command.
- * Shared by `update` (foreground, streamed) and the passive notice path.
+ * Move the source checkout onto the remote branch tip and re-link the
+ * global command.
+ *
+ * Uses syncToRemote() rather than `git pull` on purpose: the installer leaves
+ * the checkout detached at FETCH_HEAD, where `git pull` is a no-op that
+ * silently reports success. See src/version.js.
  */
 function runUpdate({ quiet = false } = {}) {
-  return new Promise((resolve) => {
-    const child = spawn('git', ['-C', ROOT, 'pull', '--ff-only'], {
-      stdio: quiet ? ['ignore', 'ignore', 'pipe'] : 'inherit',
-    });
-    let stderr = '';
-    if (quiet) child.stderr.on('data', (c) => (stderr += c));
-    child.on('error', (err) => resolve({ ok: false, error: err.message }));
-    child.on('close', (code) => resolve({ ok: code === 0, code, stderr }));
-  });
+  return syncToRemote({ quiet });
 }
 
 async function cmdUpdate(argv) {
@@ -405,13 +406,18 @@ async function cmdUpdate(argv) {
     return;
   }
 
-  console.log(chalk.gray('  Pulling latest source…'));
+  console.log(chalk.gray('  Syncing to the latest commit…'));
   console.log();
   const pull = await runUpdate();
   if (!pull.ok) {
-    console.log(chalk.red(`  ✖ git pull failed${pull.error ? `: ${pull.error}` : ''}`));
-    console.log(chalk.gray('    The source check out is dirty, diverged, or offline.'));
-    console.log(chalk.gray(`    You can also re-run the installer to refresh ${ROOT}.`));
+    if (pull.dirty) {
+      console.log(chalk.red('  ✖ Local changes would be overwritten.'));
+      console.log(chalk.gray(`    Commit or discard them in ${ROOT}, then retry.`));
+    } else {
+      console.log(chalk.red(`  ✖ Update failed${pull.error ? `: ${pull.error}` : ''}`));
+      console.log(chalk.gray(`    The checkout may be offline, or ${ROOT} may not be a git clone.`));
+      console.log(chalk.gray(`    Re-running the installer will also refresh it.`));
+    }
     console.log();
     process.exitCode = 1;
     return;
@@ -430,7 +436,7 @@ async function cmdUpdate(argv) {
   });
 
   console.log();
-  console.log(chalk.green('  ✔ Updated to ') + chalk.bold.white(shortSha(status.latest)));
+  console.log(chalk.green('  ✔ Updated to ') + chalk.bold.white(shortSha(pull.sha || status.latest)));
   if (!link.ok) {
     console.log(chalk.yellow('    npm link failed — the source is updated, but the global command may be stale.'));
   }

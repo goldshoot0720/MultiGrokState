@@ -29,13 +29,20 @@ export const REPO = 'goldshoot0720/MultiGrokState';
 export const BRANCH = 'main';
 
 /** Run a git subcommand, resolving to stdout or null on any failure. */
-function git(args, cwd) {
+function git(args, cwd, { stream = false } = {}) {
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'ignore'] });
+      child = spawn('git', args, { cwd, stdio: stream ? 'inherit' : ['ignore', 'pipe', 'ignore'] });
     } catch {
       resolve(null);
+      return;
+    }
+    // In stream mode git writes straight to the terminal; we only care about
+    // the exit code, so there is no stdout to collect.
+    if (stream) {
+      child.on('error', () => resolve(null));
+      child.on('close', (code) => resolve(code === 0 ? '' : null));
       return;
     }
     let out = '';
@@ -55,7 +62,17 @@ export async function localSha(cwd = ROOT) {
 export async function localStatus(cwd = ROOT) {
   const sha = await localSha(cwd);
   const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd))?.trim();
-  return { sha, branch: branch && branch !== 'HEAD' ? branch : null };
+  // The installer leaves the checkout detached at FETCH_HEAD, so `HEAD` here
+  // is literally the string "HEAD" — flag that instead of reporting it as a
+  // branch name, since a detached HEAD changes how an update must be applied.
+  const detached = !branch || branch === 'HEAD';
+  return { sha, branch: detached ? null : branch, detached };
+}
+
+/** The configured remote URL, or null. */
+export async function remoteUrl(cwd = ROOT) {
+  const out = await git(['remote', 'get-url', 'origin'], cwd);
+  return out ? out.trim() : null;
 }
 
 /** Resolve a branch/tag/SHA to a concrete commit SHA via the GitHub API. */
@@ -102,7 +119,7 @@ export async function remoteSha(opts = {}) {
  *   latest:string|null, behind:boolean, branch:string|null}>}
  */
 export async function checkForUpdate({ repo = REPO, branch = BRANCH } = {}) {
-  const { sha: current, branch: localBranch } = await localStatus();
+  const { sha: current, branch: localBranch, detached } = await localStatus();
   if (!current) {
     return { ok: false, reason: 'not a git checkout', current: null, latest: null, behind: false, branch: null };
   }
@@ -116,12 +133,52 @@ export async function checkForUpdate({ repo = REPO, branch = BRANCH } = {}) {
       latest: null,
       behind: false,
       branch: localBranch,
+      detached,
     };
   }
 
   // A short-SHA match is enough: 7 hex chars uniquely identify a commit here.
   const behind = !current.startsWith(latest.slice(0, 7)) && !latest.startsWith(current.slice(0, 7));
-  return { ok: true, current, latest, behind, branch: localBranch || branch };
+  return { ok: true, current, latest, behind, branch: localBranch || branch, detached };
+}
+
+/**
+ * Move the checkout onto the remote branch tip.
+ *
+ * This deliberately does NOT use `git pull`. The installer leaves the
+ * checkout detached at FETCH_HEAD, and `git pull` on a detached HEAD reports
+ * "Already up to date" and changes nothing — a silent no-op that would make
+ * the update command useless for every real installation.
+ *
+ * Instead we resolve the branch to an immutable SHA (never a cached branch
+ * name, for the CDN reasons the installer documents), fetch that exact commit,
+ * and hard-reset onto it. Untracked files are left alone; any tracked local
+ * edits are discarded, which is why the caller checks for a clean tree first.
+ *
+ * @returns {Promise<{ok:boolean, sha?:string|null, error?:string, dirty?:boolean}>}
+ */
+export async function syncToRemote({ repo = REPO, branch = BRANCH, cwd = ROOT, quiet = true } = {}) {
+  if (!(await isClean(cwd))) return { ok: false, dirty: true };
+
+  const sha = await remoteSha({ repo, branch });
+  if (!sha) return { ok: false, error: 'could not resolve the remote branch' };
+
+  const stream = !quiet;
+  const fetched = await git(['fetch', '--depth', '1', 'origin', sha], cwd, { stream });
+  if (fetched == null) return { ok: false, error: 'git fetch failed' };
+
+  const reset = await git(['reset', '--hard', 'FETCH_HEAD'], cwd, { stream });
+  if (reset == null) return { ok: false, error: 'git reset failed' };
+
+  return { ok: true, sha };
+}
+
+/** True when the working tree has no staged or unstaged changes. */
+export async function isClean(cwd = ROOT) {
+  const out = await git(['status', '--porcelain'], cwd);
+  // `git status --porcelain` prints nothing for a clean tree; null means git
+  // itself failed, which we treat as "not safe to overwrite".
+  return out != null && out.trim() === '';
 }
 
 /* ------------------------------------------------------------------ */
