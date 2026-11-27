@@ -8,17 +8,12 @@ import { login, logout, switchTo, findGrokBinary } from './commands.js';
 import { accountsDir, authJsonPath } from './paths.js';
 import { ROOT, REPO, BRANCH, checkForUpdate, cachedUpdateNotice, syncToRemote, shortSha } from './version.js';
 
-const STATUS_STYLE = {
-  valid: (s) => chalk.green(s),
-  expiring: (s) => chalk.yellow(s),
-  expired: (s) => chalk.red(s),
-  unknown: (s) => chalk.gray(s),
-  invalid: (s) => chalk.red(s),
-};
+if (process.env.NO_COLOR && process.env.FORCE_COLOR == null) chalk.level = 0;
+
+const accent = chalk.level >= 2 ? chalk.hex('#78cfc6') : chalk.cyan;
 
 function statusChip(state) {
-  const paint = STATUS_STYLE[state] || chalk.gray;
-  return paint(`● ${state}`);
+  return state === 'valid' ? chalk.gray(state) : chalk.bold(state);
 }
 
 /**
@@ -90,22 +85,14 @@ function accountLabel(a, width = 30) {
   return padVisible(text, width);
 }
 
-/** Colour a usage percentage by how close it is to the cap. */
 function paintPercent(pct) {
-  if (pct == null) return chalk.gray('—');
-  const text = `${pct.toFixed(1)}%`;
-  if (pct >= 90) return chalk.red(text);
-  if (pct >= 70) return chalk.yellow(text);
-  return chalk.green(text);
+  return pct == null ? chalk.gray('—') : chalk.bold(`${pct.toFixed(1)}%`);
 }
 
 function paintBar(pct) {
-  if (pct == null) return chalk.gray('░'.repeat(20));
-  const p = Number(pct) || 0;
-  const glyphs = bar(p, 20);
-  if (p >= 90) return chalk.red(glyphs);
-  if (p >= 70) return chalk.yellow(glyphs);
-  return chalk.green(glyphs);
+  const glyphs = bar(pct, 20);
+  return glyphs.replace(/█+/, (fill) => accent(fill))
+    .replace(/░+/, (track) => chalk.gray(track));
 }
 
 /** "18 / 500" style allowance summary, or a hint when the plan has no cap. */
@@ -118,11 +105,15 @@ function allowanceText(u) {
   return chalk.gray(`${used} / ${u.limit}`);
 }
 
-function rule(label) {
-  const width = 62;
-  if (!label) return chalk.gray('─'.repeat(width));
-  const head = ` ${label} `;
-  return chalk.gray(head + '─'.repeat(Math.max(0, width - head.length - 1)));
+function rule(label = '') {
+  const width = Math.min(76, process.stdout.columns || 76);
+  const start = label ? `  ${chalk.bold(label)}  ` : '  ';
+  return start + chalk.gray('─'.repeat(Math.max(0, width - displayWidth(start) - 2)));
+}
+
+function heading(title) {
+  console.log(`\n  ${accent('>_')} ${chalk.bold('MultiGrokState')} ${chalk.gray('/')} ${chalk.bold(title)}`);
+  console.log(rule());
 }
 
 /** "resets in 6d" — kept for the compact table view. */
@@ -177,11 +168,11 @@ async function cmdList(argv) {
     return;
   }
 
+  heading('Account archive');
   if (!accounts.length) {
-    console.log();
-    console.log(chalk.yellow('  No accounts archived yet.'));
+    console.log('  No accounts archived yet.');
     console.log(chalk.gray(`  Archive directory: ${accountsDir()}`));
-    console.log(chalk.gray('  Run: ') + chalk.cyan('gs login <name>'));
+    console.log(chalk.gray('  Run: ') + accent('MultiGrokState login'));
     console.log();
     return;
   }
@@ -189,25 +180,27 @@ async function cmdList(argv) {
   const liveAuth = readLiveAuth();
   const liveId = liveAuth ? identityOf(primaryCredential(liveAuth)?.data || {}) : null;
 
-  console.log();
-  console.log(chalk.bold.cyan('  Grok accounts') + chalk.gray(`  (${accounts.length})`));
-  console.log(rule());
-  console.log(
-    '  ' +
-      chalk.gray('#  ') +
-      padVisible(chalk.bold('name'), 16) +
-      padVisible(chalk.bold('account'), 30) +
-      chalk.bold('token')
-  );
-  console.log(rule());
+  const nameWidth = Math.max(12, ...accounts.map((a) => displayWidth(a.name) + 2));
+  const numberWidth = String(accounts.length).length;
+  const compact = process.stdout.isTTY && process.stdout.columns < Math.max(76, nameWidth + numberWidth + 58);
+  console.log(`  ${chalk.bold(`${accounts.length} archived`)}\n`);
+  if (!compact) {
+    console.log('    ' + padVisible(chalk.gray('#'), numberWidth + 2) +
+      padVisible(chalk.gray('name'), nameWidth) + padVisible(chalk.gray('account'), 31) + chalk.gray('token'));
+  }
 
   for (const [i, a] of accounts.entries()) {
     const active = liveId && a.credential && identityOf(a.credential.data) === liveId;
-    const marker = active ? chalk.green('▶') : chalk.gray(' ');
-    const name = padVisible(active ? chalk.green.bold(a.name) : chalk.white(a.name), 16);
-    const label = accountLabel(a);
+    const marker = active ? accent('▶') : ' ';
+    const name = active ? accent.bold(a.name) : chalk.bold(a.name);
+    const index = chalk.gray(String(i + 1).padStart(numberWidth));
     const expiry = a.expiresAt ? chalk.gray(humanExpiry(a.expiresAt)) : '';
-    console.log(`  ${marker} ${chalk.gray(String(i + 1).padStart(2))} ${name}${label}${statusChip(a.status)} ${expiry}`);
+    const token = `${statusChip(a.status)} ${expiry}`.trimEnd();
+    if (compact) {
+      console.log(`  ${marker} ${index}  ${name}\n       ${a.email || a.displayName || '(no email)'}\n       ${token}`);
+    } else {
+      console.log(`  ${marker} ${index}  ${padVisible(name, nameWidth)}${accountLabel(a)} ${token}`);
+    }
   }
 
   console.log(rule());
@@ -218,19 +211,14 @@ async function cmdList(argv) {
 }
 
 async function printUsageTable(accounts) {
-  console.log(rule('live usage'));
-  // Widen the name gutter if any name would overflow it.
-  const gutter = Math.max(16, ...accounts.map((a) => a.name.length + 2));
-  // Usage rows are indented under the account column, past the name gutter.
-  const indent = ' '.repeat(2 + gutter);
+  console.log(rule('Live usage'));
+  const indent = '    ';
   for (const a of accounts) {
     if (!a.credential) {
-      console.log(`  ${chalk.gray(a.name.padEnd(gutter))}${chalk.red('no credential')}`);
+      console.log(`  ${chalk.bold(a.name)}  ${chalk.bold('no credential')}`);
       continue;
     }
-    // Name + email on one line: the email is what tells two archives of the
-    // same person apart.
-    console.log(`  ${chalk.bold.white(a.name.padEnd(gutter))}${chalk.gray(a.email || '')}`);
+    console.log(`  ${chalk.bold(a.name)}  ${chalk.gray(a.email || '')}`);
     try {
       const u = await fetchUsage(a.credential, {
         onTokenRefreshed: (data) => updateAccountCredential(a.name, data),
@@ -244,11 +232,11 @@ async function printUsageTable(accounts) {
       const period = u.periodType === 'weekly' ? 'wk' : u.periodType === 'monthly' ? 'mo' : '  ';
       const allowance = allowanceText(u);
       console.log(
-        `${indent}${paintBar(pct)} ${paintPercent(pct).padEnd(14)} ${chalk.gray(`[${period}]`)} ${relativeDays(u.periodEnd)}`
+        `${indent}${paintBar(pct)} ${padVisible(paintPercent(pct), 7)} ${chalk.gray(`[${period}]`)} ${relativeDays(u.periodEnd)}`
       );
-      if (allowance) console.log(`${indent}${' '.repeat(21)}${allowance}`);
+      if (allowance) console.log(`${indent}${allowance}`);
       const reset = resetLine(u.periodEnd);
-      if (reset) console.log(`${indent}${' '.repeat(21)}${reset}`);
+      if (reset) console.log(`${indent}${reset}`);
     } catch (err) {
       console.log(`${indent}${chalk.red(`✖ ${err.message}`)}`);
     }
@@ -304,23 +292,19 @@ async function cmdUsage(argv) {
     return;
   }
 
+  heading('Usage & quota');
   if (!accounts.length) {
-    console.log();
-    console.log(chalk.yellow('  Nothing to show. Archive an account first with ') + chalk.cyan('gs login <name>'));
+    console.log('  Nothing to show. Archive an account first with ' + accent('MultiGrokState login'));
     console.log();
     return;
   }
-
-  console.log();
-  console.log(chalk.bold.cyan('  Usage & quota'));
-  console.log(rule());
 
   for (const a of accounts) {
     if (!a.credential) {
       console.log(`  ${chalk.white(a.name)} ${chalk.red('— no credential')}`);
       continue;
     }
-    console.log(`  ${chalk.bold.white(a.name)} ${chalk.gray(a.email || '')}`);
+    console.log(`  ${accent('│')} ${chalk.bold(a.name)}  ${chalk.gray(a.email || '')}`);
     try {
       const u = await fetchUsage(a.credential, {
         onTokenRefreshed: (data) => updateAccountCredential(a.name, data),
@@ -333,13 +317,13 @@ async function cmdUsage(argv) {
       // A plan with no reported allowance (common on SuperGrok weekly) still
       // renders a bar at 0%, the way the Grok CLI does, rather than a blank.
       const weeklyPct = u.creditUsagePercent ?? (u.noCapReported ? 0 : null);
-      console.log(`    weekly  ${paintBar(weeklyPct)} ${paintPercent(weeklyPct)}`);
+      console.log(`    ${chalk.bold('weekly')}  ${paintBar(weeklyPct)} ${paintPercent(weeklyPct)}`);
       if (allowanceText(u)) console.log(`            ${allowanceText(u)}`);
       const weeklyReset = resetLine(u.periodEnd);
       if (weeklyReset) console.log(`            ${weeklyReset}`);
       if (u.monthly) {
         const monthlyPct = u.monthly.creditUsagePercent ?? (u.monthly.noCapReported ? 0 : null);
-        console.log(`    monthly ${paintBar(monthlyPct)} ${paintPercent(monthlyPct)}`);
+        console.log(`    ${chalk.bold('monthly')} ${paintBar(monthlyPct)} ${paintPercent(monthlyPct)}`);
         if (allowanceText(u.monthly)) console.log(`            ${allowanceText(u.monthly)}`);
         const monthlyReset = resetLine(u.monthly.periodEnd);
         if (monthlyReset) console.log(`            ${monthlyReset}`);
@@ -364,14 +348,14 @@ async function cmdUsage(argv) {
 
 async function cmdLogin(argv) {
   const name = argv.find((a) => !a.startsWith('-'));
-  console.log();
-  console.log(chalk.cyan('  Opening Grok CLI login…'));
+  heading('Login');
+  console.log('  Opening Grok CLI login…');
   console.log(chalk.gray(`  binary: ${findGrokBinary()}`));
   console.log();
 
   const res = await login(name);
   console.log();
-  console.log(chalk.green(`  ✔ Saved account `) + chalk.bold.white(res.name));
+  console.log(accent(`  ✔ Saved account `) + chalk.bold.white(res.name));
   console.log(chalk.gray(`    ${displayName(res.data)} <${res.data.email || 'no email'}>`));
   console.log(chalk.gray(`    → ${res.file}`));
   console.log();
@@ -382,12 +366,12 @@ function cmdLogout(argv) {
   const name = argv.find((a) => !a.startsWith('-'));
   const res = logout({ name, force });
 
-  console.log();
+  heading('Logout');
   if (!res.removed) {
     console.log(chalk.yellow('  No live auth.json — already signed out.'));
     if (res.removedLock) console.log(chalk.gray('    removed a stale auth.json.lock'));
   } else {
-    console.log(chalk.green('  ✔ Signed out') + chalk.gray(`  (removed ${authJsonPath()})`));
+    console.log(accent('  ✔ Signed out') + chalk.gray(`  (removed ${authJsonPath()})`));
     if (res.removedLock) console.log(chalk.gray(`    removed ${authJsonPath()}.lock`));
     if (res.backedUp) {
       console.log(
@@ -406,10 +390,10 @@ function cmdLogout(argv) {
 
 function cmdSwitch(argv) {
   const name = argv.find((a) => !a.startsWith('-'));
-  if (!name) throw new Error('usage: gs switch <name>');
+  if (!name) throw new Error('usage: MultiGrokState switch <name>');
   const res = switchTo(name);
-  console.log();
-  console.log(chalk.green('  ✔ Active account: ') + chalk.bold.white(res.name));
+  heading('Switch');
+  console.log(accent('  ✔ Active account: ') + chalk.bold.white(res.name));
   console.log(chalk.gray(`    ${displayName(res.data)} <${res.data.email || 'no email'}>`));
   console.log(chalk.gray('    Grok picks this up on the next request (hot-reload).'));
   console.log();
@@ -435,7 +419,7 @@ async function cmdUpdate(argv) {
   const checkOnly = argv.includes('--check') || argv.includes('-c');
 
   console.log();
-  console.log(chalk.bold.cyan('  Checking for updates…'));
+  console.log(accent.bold('  Checking for updates…'));
   console.log(chalk.gray(`  repo ${REPO} (${BRANCH})  ·  ${ROOT}`));
   console.log();
 
@@ -448,7 +432,7 @@ async function cmdUpdate(argv) {
   }
 
   if (!status.behind) {
-    console.log(chalk.green('  ✔ Already up to date') + chalk.gray(`  (${shortSha(status.current)})`));
+    console.log(accent('  ✔ Already up to date') + chalk.gray(`  (${shortSha(status.current)})`));
     console.log();
     return;
   }
@@ -494,7 +478,7 @@ async function cmdUpdate(argv) {
   });
 
   console.log();
-  console.log(chalk.green('  ✔ Updated to ') + chalk.bold.white(shortSha(pull.sha || status.latest)));
+  console.log(accent('  ✔ Updated to ') + chalk.bold.white(shortSha(pull.sha || status.latest)));
   if (!link.ok) {
     console.log(chalk.yellow('    npm link failed — the source is updated, but the global command may be stale.'));
   }
@@ -524,45 +508,36 @@ export function flushUpdateNotice() {
 }
 
 function cmdHelp() {
-  const CMD = 'MultiGrokState';
-  console.log(`
-${chalk.bold.cyan('  MultiGrokState')} ${chalk.gray('— manage multiple Grok CLI accounts')}
-
-${chalk.bold('  Usage')}
-    ${chalk.cyan(`${CMD} login [name]`)}       Run ${chalk.gray('grok login')} then snapshot auth.json → ${chalk.gray('accounts/<name>_auth.json')}
-    ${chalk.cyan(`${CMD} logout`)}              Archive auth.json as ${chalk.gray('accounts/<email>_auth.json')}, then delete it
-    ${chalk.cyan(`${CMD} logout <name>`)}       Same, but archive under an explicit name
-    ${chalk.cyan(`${CMD} logout -f`)}           Overwrite an existing archive instead of keeping it
-    ${chalk.cyan(`${CMD} switch <name>`)}       Copy an archived account into the live auth.json
-    ${chalk.cyan(`${CMD} list`)}                List archived accounts
-    ${chalk.cyan(`${CMD} list --usage`)}        List accounts and fetch live quota
-    ${chalk.cyan(`${CMD} list --json`)}         Same, as JSON (for the desktop GUI / scripts)
-    ${chalk.cyan(`${CMD} usage [name...]`)}     Show weekly / monthly usage, reset time & quota
-    ${chalk.cyan(`${CMD} usage --json`)}        Same, as JSON
-    ${chalk.cyan(`${CMD} update`)}              Check GitHub and pull the latest version
-    ${chalk.cyan(`${CMD} update --check`)}      Only report whether an update is available
-    ${chalk.cyan(`${CMD} where`)}               Print the resolved paths
-
-${chalk.bold('  Usage output')}
-    Each window shows a bar, a percentage, an allowance total, and when it
-    rolls over, e.g. ${chalk.white('Resets: October 18, 21:37, 2026 (in 6d 2h)')}
-    (local time; the countdown turns yellow inside a day, red once due).
-
-${chalk.bold('  How it works')}
-    ${chalk.gray('•')} Grok keeps its session in ${chalk.white('~/.grok/auth.json')} (map of scope → tokens).
-    ${chalk.gray('•')} ${chalk.cyan('login')} runs the official CLI flow, then copies that file to
-      ${chalk.white('~/.grok/accounts/<name>_auth.json')} — the archive.
-    ${chalk.gray('•')} ${chalk.cyan('logout')} copies that file to ${chalk.white('accounts/<email>_auth.json')}
-      first, then deletes ${chalk.white('auth.json')} + ${chalk.white('auth.json.lock')}.
-    ${chalk.gray('•')} ${chalk.cyan('switch')} merges an archive back into auth.json; Grok hot-reloads it.
-    ${chalk.gray('•')} ${chalk.cyan('usage')} calls ${chalk.gray('cli-chat-proxy.grok.com/v1/billing')} with the
-      stored token, refreshing via ${chalk.gray('auth.x.ai/oauth2/token')} when stale.
-
-${chalk.bold('  Environment')}
-    ${chalk.gray('GROK_HOME')}         override ~/.grok
-    ${chalk.gray('GROK_BIN')}          path to the grok executable
-    ${chalk.gray('GROK_NO_UPDATE_CHECK=1')}  disable the background update check
-`);
+  heading('Command guide');
+  const groups = [
+    ['Accounts', [
+      ['login [name]', 'Open Grok login and archive the session'],
+      ['logout [name] [-f]', 'Archive and sign out (-f replaces an existing archive)'],
+      ['switch <name>', 'Activate an archived session'],
+      ['list', 'Show saved accounts and token status'],
+    ]],
+    ['Quota', [
+      ['list --usage', 'List accounts with live quota'],
+      ['usage [name...]', 'Show weekly and monthly usage, allowances and reset times'],
+    ]],
+    ['Maintenance', [
+      ['where', 'Show the resolved paths'],
+      ['update --check', 'Check for a newer version'],
+      ['update', 'Install the latest version'],
+    ]],
+  ];
+  console.log(`  ${chalk.bold('MultiGrokState')} ${accent('<command>')} ${chalk.gray('[options]')}\n`);
+  for (const [section, commands] of groups) {
+    console.log(rule(section));
+    for (const [command, description] of commands) {
+      console.log(`    ${padVisible(accent(command), 22)}${description}`);
+    }
+    console.log();
+  }
+  console.log(rule('Output & environment'));
+  console.log('    Add --json to list, usage or where for machine-readable output.');
+  console.log(`    ${chalk.gray('GROK_HOME')} sets the session directory. ${chalk.gray('GROK_BIN')} selects the Grok executable.`);
+  console.log(`    ${chalk.gray('GROK_NO_UPDATE_CHECK=1')} skips background update checks.\n`);
 }
 
 export async function runCli(argv) {
@@ -621,7 +596,7 @@ export async function runCli(argv) {
         );
         return;
       }
-      console.log();
+      heading('Paths');
       console.log(chalk.gray('  grok home   ') + chalk.white(authJsonPath()));
       console.log(chalk.gray('  archives    ') + chalk.white(accountsDir()));
       console.log(chalk.gray('  grok binary ') + chalk.white(findGrokBinary()));

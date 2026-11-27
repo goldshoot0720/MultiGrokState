@@ -1,5 +1,4 @@
 using System.Text;
-using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using MultiGrokStateGui.Models;
 
@@ -14,9 +13,11 @@ public partial class AccountViewModel : ObservableObject
     // ── Raw identity ────────────────────────────────────────────────
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(Identity))]
     private string? _name;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(Identity))]
     private string? _email;
 
     [ObservableProperty]
@@ -25,7 +26,6 @@ public partial class AccountViewModel : ObservableObject
     // ── Token status ────────────────────────────────────────────────
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(StatusColor))]
     private string? _status = "unknown";
 
     [ObservableProperty]
@@ -39,7 +39,6 @@ public partial class AccountViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(PercentText))]
     [NotifyPropertyChangedFor(nameof(PercentValue))]
-    [NotifyPropertyChangedFor(nameof(BarColor))]
     private double? _weeklyPercent;
 
     [ObservableProperty]
@@ -96,23 +95,7 @@ public partial class AccountViewModel : ObservableObject
     [ObservableProperty]
     private double? _prepaidBalance;
 
-    // ── Cached brushes (avoid allocating on every property access) ──
-
-    private static readonly IBrush BrushGreen = new SolidColorBrush(Color.FromRgb(0x22, 0xC5, 0x5E));
-    private static readonly IBrush BrushYellow = new SolidColorBrush(Color.FromRgb(0xEA, 0xB3, 0x08));
-    private static readonly IBrush BrushRed = new SolidColorBrush(Color.FromRgb(0xEF, 0x44, 0x44));
-    private static readonly IBrush BrushGray = new SolidColorBrush(Color.FromRgb(0x9C, 0xA3, 0xAF));
-
-    // ── Derived display properties ─────────────────────────────────
-
-    public IBrush StatusColor => Status switch
-    {
-        "valid" => BrushGreen,
-        "expiring" => BrushYellow,
-        "expired" => BrushRed,
-        "invalid" => BrushRed,
-        _ => BrushGray,
-    };
+    public string? Identity => string.IsNullOrWhiteSpace(Email) ? Name : Email;
 
     /// <summary>
     /// A plan with no reported allowance renders "0.0%" (like the Grok CLI),
@@ -129,13 +112,6 @@ public partial class AccountViewModel : ObservableObject
     }
 
     public double PercentValue => WeeklyPercent ?? 0;
-
-    public IBrush BarColor => WeeklyPercent switch
-    {
-        >= 90 => BrushRed,
-        >= 70 => BrushYellow,
-        _ => BrushGreen,
-    };
 
     public string? MonthlyPercentText =>
         MonthlyPercent.HasValue ? $"{MonthlyPercent:F1}%" : null;

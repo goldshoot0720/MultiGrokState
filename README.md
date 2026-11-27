@@ -461,6 +461,17 @@ dotnet build -c Release
   then the list refreshes automatically when that window closes.
 - **Check updates / Update** mirror `MultiGrokState update`.
 
+### Single-file GUI for Apple Silicon
+
+Install the MultiGrokState CLI first. Download `MultiGrokState-macOS-arm64.zip` from
+[GitHub Releases](https://github.com/goldshoot0720/MultiGrokState/releases), unzip it, and open
+`MultiGrokStateGui`. You can move the executable to the Desktop. It includes the .NET
+runtime and reads the same account archive as the installed CLI.
+
+Version tags such as `v1.2.0` trigger the release workflow. It checks the package version,
+runs the CLI tests, builds the Apple Silicon executable and attaches the ZIP to the
+GitHub Release. The annotated tag message supplies the release notes.
+
 ### Which CLI does it call?
 
 In order:

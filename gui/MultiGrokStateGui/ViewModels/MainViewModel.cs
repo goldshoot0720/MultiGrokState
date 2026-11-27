@@ -19,7 +19,7 @@ public partial class MainViewModel : ViewModelBase
     private string _statusText = "Initializing...";
 
     [ObservableProperty]
-    private bool _isEmpty = true;
+    private bool _isEmpty;
 
     // Design-time constructor
     public MainViewModel() : this(new CliService()) { }
@@ -92,13 +92,17 @@ public partial class MainViewModel : ViewModelBase
                     vm.IsLoading = false;
                     if (vm.Name != null && byName.TryGetValue(vm.Name, out var u))
                         vm.ApplyUsage(u);
+                    else
+                        vm.Error = "Quota unavailable.";
                 }
             }
             catch
             {
-                // Accounts loaded fine; usage fetch failed - keep the partial result.
                 foreach (var vm in Accounts)
+                {
                     vm.IsLoading = false;
+                    vm.Error = "Could not load quota. Refresh to try again.";
+                }
             }
 
             var active = Accounts.FirstOrDefault(a => a.IsActive);
@@ -109,7 +113,7 @@ public partial class MainViewModel : ViewModelBase
         catch (Exception ex)
         {
             StatusText = $"Error: {ex.Message}";
-            IsEmpty = true;
+            IsEmpty = false;
         }
         finally
         {

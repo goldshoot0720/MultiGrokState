@@ -93,7 +93,10 @@ const server = http.createServer((req, res) => {
             currentPeriod: {
               type: 'USAGE_PERIOD_TYPE_WEEKLY',
               start: '2026-10-11T13:37:26.239595+00:00',
-              end: '2026-10-18T13:37:26.239595+00:00',
+              // Keep one future window for the countdown rendering check.
+              end: who === 'gamma'
+                ? new Date(Date.now() + 6 * 86_400_000).toISOString()
+                : '2026-10-18T13:37:26.239595+00:00',
             },
             ...(a.creditUsagePercent != null ? { creditUsagePercent: a.creditUsagePercent } : {}),
             productUsage: a.creditUsagePercent != null

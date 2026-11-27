@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Verify the release version
+        run: node -e "if ('v' + require('./package.json').version !== process.env.GITHUB_REF_NAME) process.exit(1)"
+      - run: npm ci
+      - run: npm test
+      - name: Publish the Apple Silicon desktop executable
+        run: |
+          dotnet publish gui/MultiGrokStateGui -c Release -r osx-arm64 --self-contained true \
+            -p:Version="${GITHUB_REF_NAME#v}" -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
+            -p:DebugType=None -p:DebugSymbols=false -o "$RUNNER_TEMP/gui"
+          codesign --force --sign - "$RUNNER_TEMP/gui/MultiGrokStateGui"
+          codesign --verify --strict "$RUNNER_TEMP/gui/MultiGrokStateGui"
+          zip -j "$RUNNER_TEMP/MultiGrokState-macOS-arm64.zip" "$RUNNER_TEMP/gui/MultiGrokStateGui"
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --notes-from-tag \
+            --title "MultiGrokState ${GITHUB_REF_NAME#v}" "$RUNNER_TEMP/MultiGrokState-macOS-arm64.zip"

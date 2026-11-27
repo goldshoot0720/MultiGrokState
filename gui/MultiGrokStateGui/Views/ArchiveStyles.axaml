@@ -1,0 +1,76 @@
+<Styles xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Styles.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="CanvasBrush" Color="#F4F6F7" />
+                    <SolidColorBrush x:Key="CardBrush" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="EdgeBrush" Color="#CDD5D8" />
+                    <SolidColorBrush x:Key="InkBrush" Color="#172126" />
+                    <SolidColorBrush x:Key="MutedBrush" Color="#50616A" />
+                    <SolidColorBrush x:Key="TrackBrush" Color="#E4E9EA" />
+                    <SolidColorBrush x:Key="AccentBrush" Color="#096862" />
+                    <SolidColorBrush x:Key="AccentTint" Color="#DEF1EF" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="CanvasBrush" Color="#131819" />
+                    <SolidColorBrush x:Key="CardBrush" Color="#1B2224" />
+                    <SolidColorBrush x:Key="EdgeBrush" Color="#384346" />
+                    <SolidColorBrush x:Key="InkBrush" Color="#ECF1F2" />
+                    <SolidColorBrush x:Key="MutedBrush" Color="#A9B6BA" />
+                    <SolidColorBrush x:Key="TrackBrush" Color="#344044" />
+                    <SolidColorBrush x:Key="AccentBrush" Color="#78CFC6" />
+                    <SolidColorBrush x:Key="AccentTint" Color="#233F3F" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+            <FontFamily x:Key="ReadingFace">Menlo, Consolas, monospace</FontFamily>
+        </ResourceDictionary>
+    </Styles.Resources>
+
+    <Style Selector="TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+    </Style>
+    <Style Selector="TextBlock.caption">
+        <Setter Property="Foreground" Value="{DynamicResource MutedBrush}" />
+        <Setter Property="FontSize" Value="12" />
+    </Style>
+    <Style Selector="Button">
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="MinHeight" Value="33" />
+        <Setter Property="Padding" Value="13,5" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource InkBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource EdgeBrush}" />
+    </Style>
+    <Style Selector="Button.primary">
+        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource CanvasBrush}" />
+        <Setter Property="BorderThickness" Value="0" />
+    </Style>
+    <Style Selector="TextBlock.reading">
+        <Setter Property="FontFamily" Value="{StaticResource ReadingFace}" />
+        <Setter Property="FontSize" Value="13" />
+    </Style>
+    <Style Selector="Button.flat">
+        <Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+    <Style Selector="Border.account">
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Padding" Value="20,15" />
+        <Setter Property="Background" Value="{DynamicResource CardBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource EdgeBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style Selector="Border.account.active">
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+    </Style>
+    <Style Selector="ProgressBar.meter">
+        <Setter Property="Height" Value="5" />
+        <Setter Property="CornerRadius" Value="4" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="Background" Value="{DynamicResource TrackBrush}" />
+    </Style>
+</Styles>
