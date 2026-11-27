@@ -20,6 +20,7 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -67,6 +68,47 @@ export async function localStatus(cwd = ROOT) {
   // branch name, since a detached HEAD changes how an update must be applied.
   const detached = !branch || branch === 'HEAD';
   return { sha, branch: detached ? null : branch, detached };
+}
+
+/** Read both fields from one immutable commit, even in a detached checkout. */
+export async function revisionInfo(sha, cwd = ROOT) {
+  const [manifest, timestamp] = await Promise.all([
+    git(['show', `${sha}:package.json`], cwd),
+    git(['show', '-s', '--format=%cI', sha], cwd),
+  ]);
+  let version = null;
+  try {
+    version = JSON.parse(manifest)?.version ?? null;
+  } catch { /* An older revision may have no readable package manifest. */ }
+  return { version, committedAt: timestamp?.trim() || null };
+}
+
+// A shallow installation may not have the remote commit yet. Read it without
+// changing the user's checkout, FETCH_HEAD, or shallow boundaries on a check.
+async function remoteRevisionInfo(sha, repo) {
+  const local = await revisionInfo(sha);
+  if (local.committedAt) return local;
+  let dir;
+  try {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'multigrok-revision-'));
+    if (await git(['init', '--bare', '--quiet'], dir) == null) return local;
+    const source = `https://github.com/${repo}.git`;
+    if (await git(['fetch', '--depth=1', '--no-tags', source, sha], dir) == null) return local;
+    return await revisionInfo(sha, dir);
+  } catch {
+    return local;
+  } finally {
+    if (dir) {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+  }
+}
+
+export function formatRevision(sha, info) {
+  const timestamp = Date.parse(info?.committedAt);
+  const date = Number.isFinite(timestamp) ? new Intl.DateTimeFormat('sv-SE').format(timestamp) : 'unknown';
+  const version = info?.version ? `v${info.version}` : 'version unknown';
+  return `${version}  (commit date ${date}, ${shortSha(sha)})`;
 }
 
 /** The configured remote URL, or null. */
@@ -124,12 +166,16 @@ export async function checkForUpdate({ repo = REPO, branch = BRANCH } = {}) {
     return { ok: false, reason: 'not a git checkout', current: null, latest: null, behind: false, branch: null };
   }
 
-  const latest = await remoteSha({ repo, branch });
+  const [latest, currentInfo] = await Promise.all([
+    remoteSha({ repo, branch }),
+    revisionInfo(current),
+  ]);
   if (!latest) {
     return {
       ok: false,
       reason: 'could not reach GitHub',
       current,
+      currentInfo,
       latest: null,
       behind: false,
       branch: localBranch,
@@ -137,9 +183,9 @@ export async function checkForUpdate({ repo = REPO, branch = BRANCH } = {}) {
     };
   }
 
-  // A short-SHA match is enough: 7 hex chars uniquely identify a commit here.
-  const behind = !current.startsWith(latest.slice(0, 7)) && !latest.startsWith(current.slice(0, 7));
-  return { ok: true, current, latest, behind, branch: localBranch || branch, detached };
+  const behind = current !== latest;
+  const latestInfo = behind ? await remoteRevisionInfo(latest, repo) : currentInfo;
+  return { ok: true, current, currentInfo, latest, latestInfo, behind, branch: localBranch || branch, detached };
 }
 
 /**
@@ -157,10 +203,10 @@ export async function checkForUpdate({ repo = REPO, branch = BRANCH } = {}) {
  *
  * @returns {Promise<{ok:boolean, sha?:string|null, error?:string, dirty?:boolean}>}
  */
-export async function syncToRemote({ repo = REPO, branch = BRANCH, cwd = ROOT, quiet = true } = {}) {
+export async function syncToRemote({ repo = REPO, branch = BRANCH, cwd = ROOT, quiet = true, targetSha } = {}) {
   if (!(await isClean(cwd))) return { ok: false, dirty: true };
 
-  const sha = await remoteSha({ repo, branch });
+  const sha = targetSha ?? await remoteSha({ repo, branch });
   if (!sha) return { ok: false, error: 'could not resolve the remote branch' };
 
   const stream = !quiet;
@@ -221,7 +267,9 @@ function writeCache(value) {
 export async function cachedUpdateNotice({ repo = REPO, branch = BRANCH, ttl = CACHE_TTL_MS } = {}) {
   const cached = readCache();
   if (cached && Date.now() - (cached.checkedAt || 0) < ttl) {
-    return cached.behind ? cached : null;
+    if (!cached.behind) return null;
+    if (cached.latestInfo && cached.current === await localSha()) return cached;
+    // Older cache records only stored SHAs. Refresh them once to get details.
   }
 
   const result = await checkForUpdate({ repo, branch });

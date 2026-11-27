@@ -125,7 +125,7 @@ MultiGrokState where            # print resolved paths
 `MultiGrokState update` resolves the `main` branch to a commit SHA on GitHub,
 compares it against the local `HEAD`, and — if they differ — moves the checkout
 onto that exact commit and re-links the global command, then reports the new
-revision.
+revision. Each revision shows its package version, local-calendar commit date and short SHA.
 
 It deliberately does **not** use `git pull`: the installer leaves the checkout
 **detached** at `FETCH_HEAD`, and `git pull` on a detached HEAD is a silent
@@ -139,8 +139,8 @@ $ MultiGrokState update --check
   repo goldshoot0720/MultiGrokState (main)  ·  ~/.multigrokstate
 
   ↑ Update available
-    local  de8d410
-    remote 3f9a2c1
+    local  v1.1.0  (commit date 2026-11-27, 6e1653b)
+    remote v1.2.0  (commit date 2026-11-28, f8b45e1)
 
   Run MultiGrokState update to install it.
 ```
@@ -149,7 +149,7 @@ Normal commands also run a **passive** check in the background and print a
 one-line nudge when a newer commit exists:
 
 ```
-  ↑ update available MultiGrokState update  (3f9a2c1)
+  ↑ update available MultiGrokState update  v1.2.0  (commit date 2026-11-28, f8b45e1)
 ```
 
 Details worth knowing:
@@ -461,12 +461,13 @@ dotnet build -c Release
   then the list refreshes automatically when that window closes.
 - **Check updates / Update** mirror `MultiGrokState update`.
 
-### Single-file GUI for Apple Silicon
+### macOS app for Apple Silicon
 
 Install the MultiGrokState CLI first. Download `MultiGrokState-macOS-arm64.zip` from
 [GitHub Releases](https://github.com/goldshoot0720/MultiGrokState/releases), unzip it, and open
-`MultiGrokStateGui`. You can move the executable to the Desktop. It includes the .NET
-runtime and reads the same account archive as the installed CLI.
+`MultiGrokState.app`. You can move the app to the Desktop or Applications. The bundle
+provides the Finder and Dock icon and contains one executable with the .NET runtime.
+It reads the same account archive as the installed CLI.
 
 Version tags such as `v1.2.0` trigger the release workflow. It checks the package version,
 runs the CLI tests, builds the Apple Silicon executable and attaches the ZIP to the

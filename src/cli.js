@@ -6,7 +6,7 @@ import { listAccounts, readLiveAuth, primaryCredential, displayName, identityOf,
 import { fetchUsage, bar, formatResetTime, formatCountdown, daysUntil, parseTimestamp } from './usage.js';
 import { login, logout, switchTo, findGrokBinary } from './commands.js';
 import { accountsDir, authJsonPath } from './paths.js';
-import { ROOT, REPO, BRANCH, checkForUpdate, cachedUpdateNotice, syncToRemote, shortSha } from './version.js';
+import { ROOT, REPO, BRANCH, checkForUpdate, cachedUpdateNotice, syncToRemote, revisionInfo, formatRevision } from './version.js';
 
 if (process.env.NO_COLOR && process.env.FORCE_COLOR == null) chalk.level = 0;
 
@@ -403,18 +403,6 @@ function cmdSwitch(argv) {
 /* Update                                                              */
 /* ------------------------------------------------------------------ */
 
-/**
- * Move the source checkout onto the remote branch tip and re-link the
- * global command.
- *
- * Uses syncToRemote() rather than `git pull` on purpose: the installer leaves
- * the checkout detached at FETCH_HEAD, where `git pull` is a no-op that
- * silently reports success. See src/version.js.
- */
-function runUpdate({ quiet = false } = {}) {
-  return syncToRemote({ quiet });
-}
-
 async function cmdUpdate(argv) {
   const checkOnly = argv.includes('--check') || argv.includes('-c');
 
@@ -426,20 +414,20 @@ async function cmdUpdate(argv) {
   const status = await checkForUpdate();
   if (!status.ok) {
     console.log(chalk.yellow(`  Could not check for updates: ${status.reason}`));
-    if (status.current) console.log(chalk.gray(`  local ${shortSha(status.current)}`));
+    if (status.current) console.log(chalk.gray(`  local ${formatRevision(status.current, status.currentInfo)}`));
     console.log();
     return;
   }
 
   if (!status.behind) {
-    console.log(accent('  ✔ Already up to date') + chalk.gray(`  (${shortSha(status.current)})`));
+    console.log(accent('  ✔ Already up to date') + chalk.gray(`  ${formatRevision(status.current, status.currentInfo)}`));
     console.log();
     return;
   }
 
   console.log(chalk.yellow('  ↑ Update available'));
-  console.log(chalk.gray('    local  ') + chalk.white(shortSha(status.current)));
-  console.log(chalk.gray('    remote ') + chalk.white(shortSha(status.latest)));
+  console.log(chalk.gray('    local  ') + chalk.white(formatRevision(status.current, status.currentInfo)));
+  console.log(chalk.gray('    remote ') + chalk.white(formatRevision(status.latest, status.latestInfo)));
   console.log();
 
   if (checkOnly) {
@@ -450,7 +438,7 @@ async function cmdUpdate(argv) {
 
   console.log(chalk.gray('  Syncing to the latest commit…'));
   console.log();
-  const pull = await runUpdate();
+  const pull = await syncToRemote({ quiet: false, targetSha: status.latest });
   if (!pull.ok) {
     if (pull.dirty) {
       console.log(chalk.red('  ✖ Local changes would be overwritten.'));
@@ -478,7 +466,7 @@ async function cmdUpdate(argv) {
   });
 
   console.log();
-  console.log(accent('  ✔ Updated to ') + chalk.bold.white(shortSha(pull.sha || status.latest)));
+  console.log(accent('  ✔ Updated to ') + chalk.bold.white(formatRevision(pull.sha, await revisionInfo(pull.sha))));
   if (!link.ok) {
     console.log(chalk.yellow('    npm link failed — the source is updated, but the global command may be stale.'));
   }
@@ -493,7 +481,7 @@ async function cmdUpdate(argv) {
 function updateNoticeLine() {
   const notice = globalThis.__gsUpdateNotice;
   if (!notice) return null;
-  return '  ' + chalk.gray('↑ update available ') + chalk.cyan('MultiGrokState update') + chalk.gray(`  (${shortSha(notice.latest)})`);
+  return '  ' + chalk.gray('↑ update available ') + chalk.cyan('MultiGrokState update') + chalk.gray(`  ${formatRevision(notice.latest, notice.latestInfo)}`);
 }
 
 /** Print the pending notice (if any) once, on the way out. */

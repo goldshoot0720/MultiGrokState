@@ -551,8 +551,9 @@ async function main() {
       cachePath,
       JSON.stringify({
         ok: true,
-        current: 'de8d410f7ad8c2d1438690485b1d799d201f1485',
+        current: local.sha,
         latest: 'abc1234ffffffffffffffffffffffffffffffff',
+        latestInfo: { version: '9.8.7', committedAt: '2026-01-20T08:00:00Z' },
         behind: true,
         checkedAt: Date.now(),
       })
@@ -560,6 +561,8 @@ async function main() {
     const nudged = await runGs(['list']);
     check('behind cache prints an update nudge', /update available/i.test(nudged.stdout), nudged.stdout);
     check('nudge names the update command', /MultiGrokState update/.test(nudged.stdout), nudged.stdout);
+
+    check('cached update shows its version and commit date', /v9\.8\.7 .*commit date \d{4}-\d{2}-\d{2}, abc1234/.test(nudged.stdout), nudged.stdout);
 
     // The opt-out must silence it entirely.
     const quiet = await new Promise((resolve) => {
@@ -580,6 +583,10 @@ async function main() {
     const upd = await runGs(['update', '--check']);
     check('update --check exits cleanly', upd.status === 0, upd.stderr);
     check('update --check reports a status line', /Checking for updates|up to date|Could not check|Update available/i.test(upd.stdout), upd.stdout);
+
+    const info = await ver.revisionInfo(local.sha);
+    check('installed revision includes its package version and commit date', Boolean(info.version && Number.isFinite(Date.parse(info.committedAt))));
+    check('update --check prints the installed version, date and SHA', upd.stdout.includes(ver.formatRevision(local.sha, info)), upd.stdout);
 
     console.log('\n\x1b[1m15. harness leaves the source untouched\x1b[0m');
     // Regression guard: the harness once patched src/usage.js in place and

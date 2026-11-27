@@ -43,9 +43,23 @@ jobs:
           dotnet publish gui/MultiGrokStateGui -c Release -r osx-arm64 --self-contained true \
             -p:Version="${RELEASE_TAG#v}" -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
             -p:DebugType=None -p:DebugSymbols=false -o "$RUNNER_TEMP/gui"
-          codesign --force --sign - "$RUNNER_TEMP/gui/MultiGrokStateGui"
-          codesign --verify --strict "$RUNNER_TEMP/gui/MultiGrokStateGui"
-          zip -j "$RUNNER_TEMP/MultiGrokState-macOS-arm64.zip" "$RUNNER_TEMP/gui/MultiGrokStateGui"
+          app="$RUNNER_TEMP/MultiGrokState.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp gui/MultiGrokState.app/Contents/Info.plist "$app/Contents/"
+          cp gui/MultiGrokState.app/Contents/Resources/AppIcon.icns "$app/Contents/Resources/"
+          install -m 755 "$RUNNER_TEMP/gui/MultiGrokStateGui" "$app/Contents/MacOS/MultiGrokState"
+          codesign --force --sign - "$app"
+          ditto -c -k --norsrc --keepParent "$app" "$RUNNER_TEMP/MultiGrokState-macOS-arm64.zip"
+      - name: Verify the archived app and icon
+        run: |
+          ditto -x -k "$RUNNER_TEMP/MultiGrokState-macOS-arm64.zip" "$RUNNER_TEMP/unpacked"
+          app="$RUNNER_TEMP/unpacked/MultiGrokState.app"
+          plist="$app/Contents/Info.plist"
+          test "$(plutil -extract CFBundleShortVersionString raw "$plist")" = "${RELEASE_TAG#v}"
+          test -x "$app/Contents/MacOS/$(plutil -extract CFBundleExecutable raw "$plist")"
+          icon=$(plutil -extract CFBundleIconFile raw "$plist")
+          cmp "$app/Contents/Resources/$icon" gui/MultiGrokState.app/Contents/Resources/AppIcon.icns
+          codesign --verify --strict "$app"
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
