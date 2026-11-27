@@ -173,6 +173,10 @@ public class CliService
 
         if (OperatingSystem.IsWindows())
             return ("cmd.exe", $"/c MultiGrokState {cliArgs}");
+        // On macOS Process.Start can search the app's own directory before PATH.
+        // The bundle executable is also named MultiGrokState. Let env search PATH.
+        if (OperatingSystem.IsMacOS())
+            return ("/usr/bin/env", $"MultiGrokState {cliArgs}");
         return ("MultiGrokState", cliArgs);
     }
 
@@ -183,20 +187,15 @@ public class CliService
     /// </summary>
     private (string fileName, string arguments) ResolveCommandInteractive(string cliArgs)
     {
+        if (!OperatingSystem.IsWindows())
+            return ResolveCommand(cliArgs);
+
         var over = Environment.GetEnvironmentVariable("MULTIGROKSTATE_CLI");
         if (!string.IsNullOrWhiteSpace(over))
             return (over, cliArgs);
 
         var repo = FindRepoCli();
-        if (repo != null)
-        {
-            if (OperatingSystem.IsWindows())
-                return ("cmd.exe", $"/c node \"{repo}\" {cliArgs} & pause");
-            return ("node", $"\"{repo}\" {cliArgs}");
-        }
-
-        if (OperatingSystem.IsWindows())
-            return ("cmd.exe", $"/c MultiGrokState {cliArgs} & pause");
-        return ("MultiGrokState", cliArgs);
+        var command = repo == null ? "MultiGrokState" : $"node \"{repo}\"";
+        return ("cmd.exe", $"/c {command} {cliArgs} & pause");
     }
 }

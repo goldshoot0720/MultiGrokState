@@ -60,6 +60,8 @@ jobs:
           icon=$(plutil -extract CFBundleIconFile raw "$plist")
           cmp "$app/Contents/Resources/$icon" gui/MultiGrokState.app/Contents/Resources/AppIcon.icns
           codesign --verify --strict "$app"
+      - name: Test refresh in the packaged app
+        run: bash test/macos-refresh.sh "$RUNNER_TEMP/unpacked/MultiGrokState.app/Contents/MacOS/MultiGrokState"
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}

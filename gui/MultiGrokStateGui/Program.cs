@@ -9,8 +9,15 @@ sealed class Program
     // SynchronizationContext-reliant code before AppMain is called: things aren't initialized
     // yet and stuff might break.
     [STAThread]
-    public static void Main(string[] args)
+    public static int Main(string[] args)
     {
+        // A misconfigured CLI path can point straight back at this GUI.
+        if (args is ["list" or "usage" or "switch" or "update" or "login" or "logout", ..])
+        {
+            Console.Error.WriteLine("The desktop app received a CLI command. Set MULTIGROKSTATE_CLI to the CLI executable.");
+            return 2;
+        }
+
         if (OperatingSystem.IsMacOS())
         {
             // Finder launches apps without the shell's Node and npm bin paths.
@@ -19,7 +26,7 @@ sealed class Program
             var commonBins = new[] { Path.Combine(home, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin" };
             Environment.SetEnvironmentVariable("PATH", string.Join(':', path.Union(commonBins)));
         }
-        BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+        return BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
 
     // Avalonia configuration, don't remove; also used by visual designer.

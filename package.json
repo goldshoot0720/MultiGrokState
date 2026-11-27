@@ -1,6 +1,6 @@
 {
   "name": "multi-grok-state",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Multi-account manager for Grok CLI — login/logout via auth.json copy, plus live usage/quota panel",
   "type": "module",
   "bin": {
