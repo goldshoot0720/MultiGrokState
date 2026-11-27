@@ -1,0 +1,4 @@
+#!/bin/bash
+GUI="$(cd "$(dirname "$0")/../../../MultiGrokStateGui" && pwd)"
+export DOTNET_ROLL_FORWARD=Major
+exec dotnet "$GUI/bin/Release/net8.0/MultiGrokStateGui.dll"

@@ -17,6 +17,7 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
+            MacDockIcon.Apply();
             desktop.MainWindow = new MainWindow
             {
                 DataContext = new MainViewModel(),
